@@ -1,0 +1,9 @@
+id: yaks.nvim-a10a
+title: Floating help popup
+type: feature
+priority: 2
+created: '2026-02-18T16:00:00Z'
+updated: '2026-02-18T16:00:00Z'
+description: |
+  Replace inline help toggle with centered floating window. Closes on
+  q, ?, Esc, or WinClosed. Includes Tab/Shift-Tab in help content.

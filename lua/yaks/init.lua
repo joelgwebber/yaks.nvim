@@ -17,8 +17,15 @@ M.config = {
     filter_tangled = "t",
     filter_all = "a",
   },
+  split = "vertical",
   statusline_ttl = 5,
 }
+
+--- Return the split command based on config.
+---@return string
+function M.split_cmd()
+  return M.config.split == "vertical" and "vsplit" or "split"
+end
 
 --- Set up the plugin with user configuration.
 ---@param opts? table
@@ -153,7 +160,7 @@ end
 ---@param root string
 ---@param id string
 function M._description_buffer(task, root, id)
-  vim.cmd("split")
+  vim.cmd(M.split_cmd())
   local buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_set_current_buf(buf)
 
@@ -246,7 +253,7 @@ function M.edit(id)
   end
 
   -- Open the YAML file in a split
-  vim.cmd("split " .. vim.fn.fnameescape(entry.path))
+  vim.cmd(M.split_cmd() .. " " .. vim.fn.fnameescape(entry.path))
   vim.bo.filetype = "yaml"
 
   -- Refresh list buffer on save

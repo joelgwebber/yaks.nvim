@@ -68,3 +68,18 @@ The canonical implementation is a single Python script at `scripts/yak.py` in th
 - YAML parsing: either vendor a minimal YAML parser or use `vim.fn.system('python3 -c ...')` / `vim.json.decode` on simple structures. Since task YAML is simple (flat keys, no anchors/aliases), a line-based parser may suffice. Evaluate tradeoffs.
 - Prefer Lua throughout. No Vimscript.
 - Target Neovim 0.10+.
+
+## Task tracking
+
+This project uses Yaks for task tracking. Tasks are stored as YAML files in `.yaks/`.
+
+When working on multi-step or multi-session work:
+
+- Run `/yaks:list` at the start of a session to see current tasks.
+- Run `/yaks:next` to find yaks ready to shave.
+- Before starting a task, run `/yaks:shave TASK_ID` to mark it in progress.
+- After completing a task, run `/yaks:shorn TASK_ID`.
+- When planning work, use `/yaks:create` to break it into trackable tasks with dependencies.
+- Use `/yaks:dep add TASK_ID DEP_ID` to express ordering constraints.
+- Prefer checking `/yaks:tangled` before starting new work to avoid picking up tasks with unmet dependencies.
+

@@ -1,4 +1,4 @@
---- Task list buffer — fugitive-style scratch buffer.
+--- Task list buffer — tabbed status view with floating help.
 local fs = require("yaks.fs")
 local task_mod = require("yaks.task")
 
@@ -7,33 +7,29 @@ local M = {}
 local BUF_NAME = "yaks://list"
 local ns = vim.api.nvim_create_namespace("yaks_list")
 
+local TAB_ORDER = { "hairy", "shaving", "shorn" }
+
 --- State for the current list buffer.
----@type {buf: integer|nil, line_map: table<integer, string>, all_entries: table[], filter_mode: string}
+---@type {buf: integer|nil, line_map: table<integer, string>, all_entries: table[], filter_mode: string, active_tab: string, help_win: integer|nil, help_buf: integer|nil}
 local state = {
   buf = nil,
   line_map = {},
   all_entries = {},
   filter_mode = "all", -- "all", "next", "tangled"
+  active_tab = "hairy",
+  help_win = nil,
+  help_buf = nil,
 }
 
---- Status badge characters.
-local STATUS_BADGE = {
-  hairy = "H",
-  shaving = "S",
-  shorn = "N",
-}
-
---- Format a single task line.
+--- Format a single task line (no status badge needed — tab provides context).
 ---@param entry table {status, task, path}
 ---@param is_tangled boolean
 ---@return string
 local function format_task_line(entry, is_tangled)
   local t = entry.task
-  local badge = STATUS_BADGE[entry.status] or "?"
   local tangled_mark = is_tangled and " [tangled]" or ""
   return string.format(
-    "  [%s] %-10s p%d  %-8s %s%s",
-    badge,
+    "  %-10s p%d  %-8s %s%s",
     t.id or "???",
     t.priority or 0,
     t.type or "task",
@@ -47,6 +43,9 @@ local function setup_highlights()
   local links = {
     YaksHeader = "Title",
     YaksSectionHeader = "Label",
+    YaksTabActive = "TabLineSel",
+    YaksTabInactive = "TabLine",
+    YaksFilterIndicator = "Comment",
     YaksPriority1 = "DiagnosticError",
     YaksPriority2 = "DiagnosticWarn",
     YaksPriority3 = "DiagnosticInfo",
@@ -70,21 +69,6 @@ end
 ---@param is_tangled boolean
 local function highlight_task_line(buf, lnum, line, entry, is_tangled)
   local t = entry.task
-
-  -- Badge highlight [H]/[S]/[N]
-  local badge_start = line:find("%[") or 0
-  local badge_end = line:find("%]") or 0
-  if badge_start > 0 and badge_end > 0 then
-    local status_hl = ({
-      hairy = "YaksStatusHairy",
-      shaving = "YaksStatusShaving",
-      shorn = "YaksStatusShorn",
-    })[entry.status] or "Normal"
-    vim.api.nvim_buf_set_extmark(buf, ns, lnum, badge_start - 1, {
-      end_col = badge_end,
-      hl_group = status_hl,
-    })
-  end
 
   -- Task ID highlight
   local id = t.id or ""
@@ -120,111 +104,132 @@ local function highlight_task_line(buf, lnum, line, entry, is_tangled)
   end
 end
 
+--- Build the tab bar line and return segment positions for extmarks.
+---@param all_entries table[]
+---@param active_tab string
+---@param filter_mode string
+---@return string line
+---@return table[] segments  {col_start, col_end, hl_group}
+local function build_tab_bar(all_entries, active_tab, filter_mode)
+  local st = task_mod.stats(all_entries)
+  local parts = {}
+  local segments = {}
+  local col = 0
+
+  for i, status in ipairs(TAB_ORDER) do
+    if i > 1 then
+      local sep = "   "
+      parts[#parts + 1] = sep
+      col = col + #sep
+    end
+
+    local count = st.by_status[status] or 0
+    local label = fs.STATUS_LABELS[status]
+    local text
+    if status == active_tab then
+      text = string.format("[%s (%d)]", label, count)
+    else
+      text = string.format(" %s (%d) ", label, count)
+    end
+    parts[#parts + 1] = text
+    local hl = status == active_tab and "YaksTabActive" or "YaksTabInactive"
+    segments[#segments + 1] = { col_start = col, col_end = col + #text, hl_group = hl }
+    col = col + #text
+  end
+
+  -- Filter indicator
+  if filter_mode ~= "all" then
+    local indicator
+    if filter_mode == "next" then
+      indicator = "  next"
+    else
+      indicator = "  tangled"
+    end
+    parts[#parts + 1] = indicator
+    if active_tab ~= "hairy" then
+      -- Show dimmed on non-hairy tabs
+      segments[#segments + 1] = { col_start = col, col_end = col + #indicator, hl_group = "YaksFilterIndicator" }
+    else
+      segments[#segments + 1] = { col_start = col, col_end = col + #indicator, hl_group = "YaksHeader" }
+    end
+  end
+
+  return table.concat(parts), segments
+end
+
 --- Build the buffer content lines, line_map, and extmarks.
 ---@param all_entries table[]
----@param filter string "all", "next", "tangled"
+---@param active_tab string
+---@param filter_mode string
 ---@return string[] lines
 ---@return table<integer, string> line_map
-local function build_content(all_entries, filter)
+---@return table[] task_extmarks
+---@return table[] tab_segments
+local function build_content(all_entries, active_tab, filter_mode)
   local lines = {}
   local line_map = {}
-  local extmarks = {} -- {lnum, entry, is_tangled}
+  local task_extmarks = {}
 
-  -- Determine which entries to show
-  local entries_by_status = { hairy = {}, shaving = {}, shorn = {} }
-  local display_entries
-
-  if filter == "next" then
-    display_entries = task_mod.next_tasks(all_entries)
-    for _, e in ipairs(display_entries) do
-      table.insert(entries_by_status[e.status], e)
-    end
-  elseif filter == "tangled" then
-    display_entries = task_mod.tangled_tasks(all_entries)
-    for _, e in ipairs(display_entries) do
-      table.insert(entries_by_status[e.status], e)
-    end
-  else
-    for _, e in ipairs(all_entries) do
-      table.insert(entries_by_status[e.status], e)
-    end
-  end
-
-  -- Sort each group
-  for _, status in ipairs(fs.STATUSES) do
-    task_mod.sort_by_priority(entries_by_status[status])
-  end
-
-  -- Stats for header
-  local st = task_mod.stats(all_entries)
-  local filter_label = ""
-  if filter == "next" then
-    filter_label = " (next only)"
-  elseif filter == "tangled" then
-    filter_label = " (tangled only)"
-  end
-
-  -- Header line
-  local header = string.format(
-    "Yaks ── %d hairy · %d shaving · %d shorn%s",
-    st.by_status.hairy,
-    st.by_status.shaving,
-    st.by_status.shorn,
-    filter_label
-  )
-  lines[#lines + 1] = header
+  -- Tab bar header
+  local tab_line, tab_segments = build_tab_bar(all_entries, active_tab, filter_mode)
+  lines[#lines + 1] = tab_line
   lines[#lines + 1] = ""
 
-  -- Sections
-  for _, status in ipairs(fs.STATUSES) do
-    local group = entries_by_status[status]
-    if #group > 0 then
-      local section = string.format("%s (%d)", fs.STATUS_LABELS[status], #group)
-      lines[#lines + 1] = section
-      local section_lnum = #lines -- 1-indexed
-
-      for _, entry in ipairs(group) do
-        local is_tangled = task_mod.is_tangled(entry, all_entries)
-        local task_line = format_task_line(entry, is_tangled)
-        lines[#lines + 1] = task_line
-        line_map[#lines] = entry.task.id
-        extmarks[#extmarks + 1] = { lnum = #lines - 1, entry = entry, is_tangled = is_tangled }
-      end
-      lines[#lines + 1] = ""
+  -- Determine which entries to show for the active tab
+  local tab_entries = {}
+  for _, e in ipairs(all_entries) do
+    if e.status == active_tab then
+      tab_entries[#tab_entries + 1] = e
     end
+  end
+
+  -- Apply filter only on hairy tab
+  local display_entries
+  if active_tab == "hairy" and filter_mode == "next" then
+    display_entries = task_mod.next_tasks(all_entries)
+  elseif active_tab == "hairy" and filter_mode == "tangled" then
+    display_entries = task_mod.tangled_tasks(all_entries)
+  else
+    display_entries = tab_entries
+  end
+
+  -- Sort by priority
+  task_mod.sort_by_priority(display_entries)
+
+  if #display_entries == 0 then
+    lines[#lines + 1] = "  (no tasks)"
+    lines[#lines + 1] = ""
+  else
+    for _, entry in ipairs(display_entries) do
+      local is_tangled = active_tab == "hairy" and task_mod.is_tangled(entry, all_entries)
+      local task_line = format_task_line(entry, is_tangled)
+      lines[#lines + 1] = task_line
+      line_map[#lines] = entry.task.id
+      task_extmarks[#task_extmarks + 1] = { lnum = #lines - 1, entry = entry, is_tangled = is_tangled }
+    end
+    lines[#lines + 1] = ""
   end
 
   -- Help footer
   lines[#lines + 1] = "Press ? for help"
 
-  return lines, line_map, extmarks
+  return lines, line_map, task_extmarks, tab_segments
 end
 
---- Apply all extmark highlights to the buffer (must be called after buffer content is set).
+--- Apply all extmark highlights to the buffer.
 ---@param buf integer
 ---@param lines string[]
----@param extmarks table[]
-local function apply_extmarks(buf, lines, extmarks)
+---@param task_extmarks table[]
+---@param tab_segments table[]
+local function apply_extmarks(buf, lines, task_extmarks, tab_segments)
   vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
 
-  -- Header highlight
-  if #lines > 0 then
-    vim.api.nvim_buf_set_extmark(buf, ns, 0, 0, {
-      end_col = #lines[1],
-      hl_group = "YaksHeader",
+  -- Tab bar highlights
+  for _, seg in ipairs(tab_segments) do
+    vim.api.nvim_buf_set_extmark(buf, ns, 0, seg.col_start, {
+      end_col = seg.col_end,
+      hl_group = seg.hl_group,
     })
-  end
-
-  -- Section headers
-  for lnum, line in ipairs(lines) do
-    for _, status in ipairs(fs.STATUSES) do
-      if line:match("^" .. fs.STATUS_LABELS[status] .. " %(") then
-        vim.api.nvim_buf_set_extmark(buf, ns, lnum - 1, 0, {
-          end_col = #line,
-          hl_group = "YaksSectionHeader",
-        })
-      end
-    end
   end
 
   -- Help footer
@@ -236,7 +241,7 @@ local function apply_extmarks(buf, lines, extmarks)
   end
 
   -- Task line highlights
-  for _, em in ipairs(extmarks) do
+  for _, em in ipairs(task_extmarks) do
     highlight_task_line(buf, em.lnum, lines[em.lnum + 1], em.entry, em.is_tangled)
   end
 end
@@ -268,14 +273,14 @@ function M.refresh()
   local cursor_row = vim.api.nvim_win_get_cursor(0)[1]
 
   state.all_entries = fs.list_all_tasks(root)
-  local lines, line_map, extmarks = build_content(state.all_entries, state.filter_mode)
+  local lines, line_map, task_extmarks, tab_segments = build_content(state.all_entries, state.active_tab, state.filter_mode)
   state.line_map = line_map
 
   vim.bo[state.buf].modifiable = true
   vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, lines)
   vim.bo[state.buf].modifiable = false
 
-  apply_extmarks(state.buf, lines, extmarks)
+  apply_extmarks(state.buf, lines, task_extmarks, tab_segments)
 
   -- Restore cursor to same task or nearest valid position
   if cursor_id then
@@ -289,6 +294,133 @@ function M.refresh()
   -- Fallback: stay near the same row
   local max_row = vim.api.nvim_buf_line_count(state.buf)
   pcall(vim.api.nvim_win_set_cursor, 0, { math.min(cursor_row, max_row), 0 })
+end
+
+--- Cycle to the next or previous tab.
+---@param direction integer 1 for next, -1 for previous
+local function cycle_tab(direction)
+  local idx
+  for i, s in ipairs(TAB_ORDER) do
+    if s == state.active_tab then
+      idx = i
+      break
+    end
+  end
+  idx = ((idx - 1 + direction) % #TAB_ORDER) + 1
+  state.active_tab = TAB_ORDER[idx]
+  M.refresh()
+  -- Move cursor to first task line (line 3, after tab bar + blank line)
+  local first_task = nil
+  for lnum, _ in pairs(state.line_map) do
+    if not first_task or lnum < first_task then
+      first_task = lnum
+    end
+  end
+  if first_task then
+    pcall(vim.api.nvim_win_set_cursor, 0, { first_task, 0 })
+  end
+end
+
+--- Close the floating help window if open.
+local function close_help()
+  if state.help_win and vim.api.nvim_win_is_valid(state.help_win) then
+    vim.api.nvim_win_close(state.help_win, true)
+  end
+  state.help_win = nil
+  state.help_buf = nil
+end
+
+--- Open a floating help popup.
+local function open_help()
+  -- If already open, close it
+  if state.help_win and vim.api.nvim_win_is_valid(state.help_win) then
+    close_help()
+    return
+  end
+
+  local help_lines = {
+    " Yaks Help",
+    "",
+    "  Navigation",
+    "  <Tab>      Next tab",
+    "  <S-Tab>    Previous tab",
+    "",
+    "  Actions",
+    "  <CR>       Show task detail",
+    "  s          Shave (→ shaving)",
+    "  x          Shorn (→ shorn)",
+    "  r          Regrow (→ hairy)",
+    "  c          Create new task",
+    "  e          Edit raw YAML",
+    "  R          Refresh list",
+    "",
+    "  Filters (hairy tab only)",
+    "  n          Toggle next filter",
+    "  t          Toggle tangled filter",
+    "  a          Show all tasks",
+    "",
+    "  q          Close list",
+    "  ?          Toggle this help",
+  }
+
+  local width = 36
+  local height = #help_lines
+  local row = math.floor((vim.o.lines - height) / 2)
+  local col = math.floor((vim.o.columns - width) / 2)
+
+  local help_buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(help_buf, 0, -1, false, help_lines)
+  vim.bo[help_buf].modifiable = false
+  vim.bo[help_buf].bufhidden = "wipe"
+
+  local help_win = vim.api.nvim_open_win(help_buf, true, {
+    relative = "editor",
+    width = width,
+    height = height,
+    row = row,
+    col = col,
+    border = "rounded",
+    style = "minimal",
+  })
+
+  state.help_win = help_win
+  state.help_buf = help_buf
+
+  -- Highlight the title
+  local help_ns = vim.api.nvim_create_namespace("yaks_help")
+  vim.api.nvim_buf_set_extmark(help_buf, help_ns, 0, 0, {
+    end_col = #help_lines[1],
+    hl_group = "YaksHeader",
+  })
+  -- Highlight section headers
+  local section_headers = {
+    ["  Navigation"] = true,
+    ["  Actions"] = true,
+    ["  Filters (hairy tab only)"] = true,
+  }
+  for i, line in ipairs(help_lines) do
+    if section_headers[line] then
+      vim.api.nvim_buf_set_extmark(help_buf, help_ns, i - 1, 0, {
+        end_col = #line,
+        hl_group = "YaksSectionHeader",
+      })
+    end
+  end
+
+  -- Close on q, ?, Esc
+  for _, key in ipairs({ "q", "?", "<Esc>" }) do
+    vim.keymap.set("n", key, close_help, { buffer = help_buf, nowait = true })
+  end
+
+  -- Close on WinClosed
+  vim.api.nvim_create_autocmd("WinClosed", {
+    pattern = tostring(help_win),
+    once = true,
+    callback = function()
+      state.help_win = nil
+      state.help_buf = nil
+    end,
+  })
 end
 
 --- Set up buffer-local keymaps.
@@ -351,16 +483,22 @@ local function setup_keymaps(buf)
   end, "Close list")
 
   map(keymaps.help or "?", function()
-    M.toggle_help()
+    open_help()
   end, "Toggle help")
 
   map(keymaps.filter_next or "n", function()
     state.filter_mode = state.filter_mode == "next" and "all" or "next"
+    if state.filter_mode == "next" then
+      state.active_tab = "hairy"
+    end
     M.refresh()
   end, "Toggle next filter")
 
   map(keymaps.filter_tangled or "t", function()
     state.filter_mode = state.filter_mode == "tangled" and "all" or "tangled"
+    if state.filter_mode == "tangled" then
+      state.active_tab = "hairy"
+    end
     M.refresh()
   end, "Toggle tangled filter")
 
@@ -368,12 +506,24 @@ local function setup_keymaps(buf)
     state.filter_mode = "all"
     M.refresh()
   end, "Show all tasks")
+
+  -- Tab navigation
+  map("<Tab>", function()
+    cycle_tab(1)
+  end, "Next tab")
+
+  map("<S-Tab>", function()
+    cycle_tab(-1)
+  end, "Previous tab")
 end
 
 --- Set the filter mode and refresh.
 ---@param mode string "all", "next", or "tangled"
 function M.set_filter(mode)
   state.filter_mode = mode
+  if mode ~= "all" then
+    state.active_tab = "hairy"
+  end
   M.refresh()
 end
 
@@ -385,6 +535,7 @@ function M.open(opts)
   local filter = opts and opts.filter
   if filter then
     state.filter_mode = filter
+    state.active_tab = "hairy"
   end
 
   -- Reuse existing buffer if valid
@@ -416,12 +567,14 @@ function M.open(opts)
   setup_keymaps(state.buf)
   if not filter then
     state.filter_mode = "all"
+    state.active_tab = "hairy"
   end
   M.refresh()
 end
 
 --- Close the list buffer.
 function M.close()
+  close_help()
   if state.buf and vim.api.nvim_buf_is_valid(state.buf) then
     -- Find windows showing this buffer and close them or switch to alternate
     for _, win in ipairs(vim.api.nvim_list_wins()) do
@@ -440,59 +593,6 @@ function M.close()
       end
     end
   end
-end
-
---- Toggle help text at the bottom of the list.
-function M.toggle_help()
-  if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then
-    return
-  end
-
-  local last_line = vim.api.nvim_buf_get_lines(state.buf, -2, -1, false)[1] or ""
-
-  vim.bo[state.buf].modifiable = true
-  if last_line:match("^%s+%S+ ") then
-    -- Help is showing, remove it
-    -- Find where help starts
-    local lines = vim.api.nvim_buf_get_lines(state.buf, 0, -1, false)
-    local help_start = nil
-    for i = #lines, 1, -1 do
-      if lines[i] == "Press ? for help" or lines[i] == "" then
-        break
-      end
-      if lines[i]:match("^%s+%S+ ") then
-        help_start = i
-      end
-    end
-    if help_start then
-      vim.api.nvim_buf_set_lines(state.buf, help_start - 1, -1, false, { "Press ? for help" })
-    end
-  else
-    -- Show help
-    local help_lines = {
-      "",
-      "  <CR>  Show task detail",
-      "  s     Shave (→ shaving)",
-      "  x     Shorn (→ shorn)",
-      "  r     Regrow (→ hairy)",
-      "  c     Create new task",
-      "  e     Edit raw YAML",
-      "  R     Refresh list",
-      "  n     Toggle next filter",
-      "  t     Toggle tangled filter",
-      "  a     Show all tasks",
-      "  q     Close",
-    }
-    -- Replace the "Press ? for help" line
-    local lines = vim.api.nvim_buf_get_lines(state.buf, 0, -1, false)
-    for i = #lines, 1, -1 do
-      if lines[i] == "Press ? for help" then
-        vim.api.nvim_buf_set_lines(state.buf, i - 1, i, false, help_lines)
-        break
-      end
-    end
-  end
-  vim.bo[state.buf].modifiable = false
 end
 
 --- Get the buffer number of the list buffer (for external use).

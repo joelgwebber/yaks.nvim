@@ -1,9 +1,12 @@
---- Task detail view — opens in a horizontal split.
+--- Task detail view — opens in a split, reusing the same window.
 local fs = require("yaks.fs")
 
 local M = {}
 
 local ns = vim.api.nvim_create_namespace("yaks_detail")
+
+--- Persistent state for the detail window.
+local state = { win = nil, buf = nil }
 
 --- Format a task for display in the detail buffer.
 ---@param entry table {status, task, path}
@@ -100,27 +103,27 @@ local function setup_keymaps(buf, task_id)
   end
 
   map("q", function()
-    M.close(buf)
+    M.close()
   end, "Close detail")
 
   map("e", function()
-    M.close(buf)
+    M.close()
     require("yaks").edit(task_id)
   end, "Edit raw YAML")
 
   map("s", function()
     require("yaks").shave(task_id)
-    M.close(buf)
+    M.close()
   end, "Shave task")
 
   map("x", function()
     require("yaks").shorn(task_id)
-    M.close(buf)
+    M.close()
   end, "Shorn task")
 
   map("r", function()
     require("yaks").regrow(task_id)
-    M.close(buf)
+    M.close()
   end, "Regrow task")
 
   map("da", function()
@@ -128,7 +131,6 @@ local function setup_keymaps(buf, task_id)
       if dep_id and dep_id ~= "" then
         require("yaks").dep_add(task_id, dep_id)
         -- Reopen to reflect changes
-        M.close(buf)
         M.open(task_id)
       end
     end)
@@ -151,14 +153,13 @@ local function setup_keymaps(buf, task_id)
     vim.ui.select(deps, { prompt = "Remove dependency:" }, function(dep_id)
       if dep_id then
         require("yaks").dep_remove(task_id, dep_id)
-        M.close(buf)
         M.open(task_id)
       end
     end)
   end, "Remove dependency")
 end
 
---- Open the detail view for a task.
+--- Open the detail view for a task, reusing an existing detail window.
 ---@param task_id string
 function M.open(task_id)
   local root = fs.find_root()
@@ -176,11 +177,8 @@ function M.open(task_id)
   local all_entries = fs.list_all_tasks(root)
   local lines = format_detail(entry, all_entries)
 
-  -- Open a horizontal split
-  vim.cmd("split")
+  -- Create new buffer for this task
   local buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_set_current_buf(buf)
-
   vim.bo[buf].buftype = "nofile"
   vim.bo[buf].bufhidden = "wipe"
   vim.bo[buf].swapfile = false
@@ -190,26 +188,49 @@ function M.open(task_id)
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modifiable = false
 
+  -- Reuse existing detail window if valid and showing a yaks-detail buffer
+  local reuse = state.win
+    and vim.api.nvim_win_is_valid(state.win)
+    and vim.bo[vim.api.nvim_win_get_buf(state.win)].filetype == "yaks-detail"
+
+  if reuse then
+    vim.api.nvim_win_set_buf(state.win, buf)
+    vim.api.nvim_set_current_win(state.win)
+  else
+    vim.cmd(require("yaks").split_cmd())
+    vim.api.nvim_set_current_buf(buf)
+    state.win = vim.api.nvim_get_current_win()
+  end
+
+  state.buf = buf
+
+  -- Resize to fit content
+  local height = math.min(#lines + 1, math.floor(vim.o.lines * 0.4))
+  vim.api.nvim_win_set_height(state.win, height)
+
   apply_highlights(buf, lines)
   setup_keymaps(buf, task_id)
 
-  -- Resize split to fit content
-  local win = vim.api.nvim_get_current_win()
-  local height = math.min(#lines + 1, math.floor(vim.o.lines * 0.4))
-  vim.api.nvim_win_set_height(win, height)
+  -- Clear state when window is closed manually
+  vim.api.nvim_create_autocmd("WinClosed", {
+    pattern = tostring(state.win),
+    once = true,
+    callback = function()
+      state.win = nil
+      state.buf = nil
+    end,
+  })
 end
 
---- Close a detail buffer.
----@param buf integer
-function M.close(buf)
-  if buf and vim.api.nvim_buf_is_valid(buf) then
-    local wins = vim.fn.win_findbuf(buf)
-    for _, win in ipairs(wins) do
-      if #vim.api.nvim_list_wins() > 1 then
-        vim.api.nvim_win_close(win, false)
-      end
+--- Close the detail window.
+function M.close()
+  if state.win and vim.api.nvim_win_is_valid(state.win) then
+    if #vim.api.nvim_list_wins() > 1 then
+      vim.api.nvim_win_close(state.win, false)
     end
   end
+  state.win = nil
+  state.buf = nil
 end
 
 return M
