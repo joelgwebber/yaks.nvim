@@ -8,6 +8,7 @@ local BUF_NAME = "yaks://list"
 local ns = vim.api.nvim_create_namespace("yaks_list")
 
 local TAB_ORDER = { "hairy", "shaving", "shorn" }
+local TAB_ICONS = { hairy = "🦬", shaving = "✂️", shorn = "🐑" }
 
 --- State for the current list buffer.
 ---@type {buf: integer|nil, line_map: table<integer, string>, all_entries: table[], filter_mode: string, active_tab: string, help_win: integer|nil, help_buf: integer|nil}
@@ -124,12 +125,13 @@ local function build_tab_bar(all_entries, active_tab, filter_mode)
     end
 
     local count = st.by_status[status] or 0
+    local icon = TAB_ICONS[status]
     local label = fs.STATUS_LABELS[status]
     local text
     if status == active_tab then
-      text = string.format("[%s (%d)]", label, count)
+      text = string.format("[%s %s (%d)]", icon, label, count)
     else
-      text = string.format(" %s (%d) ", label, count)
+      text = string.format(" %s %s (%d) ", icon, label, count)
     end
     parts[#parts + 1] = text
     local hl = status == active_tab and "YaksTabActive" or "YaksTabInactive"

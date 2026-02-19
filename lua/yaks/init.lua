@@ -255,6 +255,8 @@ function M.edit(id)
   -- Open the YAML file in a split
   vim.cmd(M.split_cmd() .. " " .. vim.fn.fnameescape(entry.path))
   vim.bo.filetype = "yaml"
+  vim.wo.wrap = true
+  vim.wo.linebreak = true
 
   -- Refresh list buffer on save
   vim.api.nvim_create_autocmd("BufWritePost", {
