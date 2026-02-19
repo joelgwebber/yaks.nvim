@@ -1,6 +1,6 @@
 # yaks.nvim
 
-Neovim plugin for [Yaks](https://github.com/joelgoodman/yaks), a filesystem-native task tracker. Reads and writes `.yaks/` directly — no dependency on the Python CLI.
+Neovim plugin for [Yaks](https://github.com/joelgwebber/yaks), a filesystem-native task tracker. Reads and writes `.yaks/` directly — no dependency on the Python CLI.
 
 Requires Neovim 0.10+.
 
@@ -10,7 +10,7 @@ Requires Neovim 0.10+.
 
 ```lua
 {
-  'joelgoodman/yaks.nvim',
+  'joelgwebber/yaks.nvim',
   config = function()
     require('yaks').setup()
   end,

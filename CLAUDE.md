@@ -2,7 +2,7 @@
 
 ## What is this?
 
-yaks.nvim is a Neovim plugin for interacting with [Yaks](https://github.com/joelgoodman/yaks), a filesystem-native task tracker. Yaks stores tasks as plain YAML files in a `.yaks/` directory within projects — no database, no daemon. Task status is determined by which subdirectory a file lives in.
+yaks.nvim is a Neovim plugin for interacting with [Yaks](https://github.com/joelgwebber/yaks), a filesystem-native task tracker. Yaks stores tasks as plain YAML files in a `.yaks/` directory within projects — no database, no daemon. Task status is determined by which subdirectory a file lives in.
 
 ## How Yaks works
 
