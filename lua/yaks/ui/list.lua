@@ -584,6 +584,28 @@ function M.open(opts)
   vim.api.nvim_set_current_buf(state.buf)
 
   setup_keymaps(state.buf)
+
+  -- Auto-refresh when the list buffer gains focus or vim regains focus.
+  local augroup = vim.api.nvim_create_augroup("yaks_auto_refresh", { clear = true })
+  vim.api.nvim_create_autocmd("BufEnter", {
+    group = augroup,
+    buffer = state.buf,
+    callback = function()
+      M.refresh()
+    end,
+  })
+  vim.api.nvim_create_autocmd("FocusGained", {
+    group = augroup,
+    callback = function()
+      if state.buf
+        and vim.api.nvim_buf_is_valid(state.buf)
+        and vim.api.nvim_get_current_buf() == state.buf
+      then
+        M.refresh()
+      end
+    end,
+  })
+
   if not filter then
     state.filter_mode = "all"
     state.active_tab = "hairy"
