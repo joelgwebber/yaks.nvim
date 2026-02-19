@@ -258,11 +258,14 @@ function M.edit(id)
   vim.wo.wrap = true
   vim.wo.linebreak = true
 
-  -- Refresh list buffer on save
+  -- Refresh list buffer on save (deferred so :wq completes window
+  -- management before we touch the list buffer / cursor).
   vim.api.nvim_create_autocmd("BufWritePost", {
     buffer = vim.api.nvim_get_current_buf(),
     callback = function()
-      M._post_write()
+      vim.schedule(function()
+        M._post_write()
+      end)
     end,
   })
 end

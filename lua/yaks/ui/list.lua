@@ -270,9 +270,24 @@ function M.refresh()
     return
   end
 
+  -- Find the window showing the list buffer (may not be the current window
+  -- when called from a BufWritePost in an edit split).
+  local list_win = nil
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_get_buf(win) == state.buf then
+      list_win = win
+      break
+    end
+  end
+
   -- Save cursor position
-  local cursor_id = M.get_cursor_task_id()
-  local cursor_row = vim.api.nvim_win_get_cursor(0)[1]
+  local cursor_id = nil
+  local cursor_row = 1
+  if list_win then
+    local crow = vim.api.nvim_win_get_cursor(list_win)[1]
+    cursor_row = crow
+    cursor_id = state.line_map[crow]
+  end
 
   state.all_entries = fs.list_all_tasks(root)
   local lines, line_map, task_extmarks, tab_segments = build_content(state.all_entries, state.active_tab, state.filter_mode)
@@ -285,17 +300,19 @@ function M.refresh()
   apply_extmarks(state.buf, lines, task_extmarks, tab_segments)
 
   -- Restore cursor to same task or nearest valid position
-  if cursor_id then
-    for lnum, id in pairs(line_map) do
-      if id == cursor_id then
-        pcall(vim.api.nvim_win_set_cursor, 0, { lnum, 0 })
-        return
+  if list_win then
+    if cursor_id then
+      for lnum, id in pairs(line_map) do
+        if id == cursor_id then
+          pcall(vim.api.nvim_win_set_cursor, list_win, { lnum, 0 })
+          return
+        end
       end
     end
+    -- Fallback: stay near the same row
+    local max_row = vim.api.nvim_buf_line_count(state.buf)
+    pcall(vim.api.nvim_win_set_cursor, list_win, { math.min(cursor_row, max_row), 0 })
   end
-  -- Fallback: stay near the same row
-  local max_row = vim.api.nvim_buf_line_count(state.buf)
-  pcall(vim.api.nvim_win_set_cursor, 0, { math.min(cursor_row, max_row), 0 })
 end
 
 --- Cycle to the next or previous tab.
