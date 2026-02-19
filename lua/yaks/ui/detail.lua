@@ -200,17 +200,12 @@ function M.open(task_id)
     vim.cmd(require("yaks").split_cmd())
     vim.api.nvim_set_current_buf(buf)
     state.win = vim.api.nvim_get_current_win()
+    -- Window options (set once on new split, not on reuse)
+    vim.wo[state.win].wrap = true
+    vim.wo[state.win].linebreak = true
   end
 
   state.buf = buf
-
-  -- Window options
-  vim.wo[state.win].wrap = true
-  vim.wo[state.win].linebreak = true
-
-  -- Resize to fit content
-  local height = math.min(#lines + 1, math.floor(vim.o.lines * 0.4))
-  vim.api.nvim_win_set_height(state.win, height)
 
   apply_highlights(buf, lines)
   setup_keymaps(buf, task_id)
