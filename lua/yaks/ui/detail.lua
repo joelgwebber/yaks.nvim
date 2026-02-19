@@ -6,15 +6,17 @@ local M = {}
 local ns = vim.api.nvim_create_namespace("yaks_detail")
 
 --- Persistent state for the detail window.
-local state = { win = nil, buf = nil }
+local state = { win = nil, buf = nil, dep_lines = {}, history = {} }
 
 --- Format a task for display in the detail buffer.
 ---@param entry table {status, task, path}
 ---@param all_entries table[] for dependency status lookup
 ---@return string[] lines
+---@return table<integer, string> dep_lines  line number → dep task ID
 local function format_detail(entry, all_entries)
   local t = entry.task
   local lines = {}
+  local dep_lines = {}
 
   -- Build a map of task ID → status for dependency display
   local id_status = {}
@@ -39,6 +41,7 @@ local function format_detail(entry, all_entries)
     for _, dep_id in ipairs(deps) do
       local dep_status = id_status[dep_id] or "unknown"
       lines[#lines + 1] = string.format("    %s (%s)", dep_id, dep_status)
+      dep_lines[#lines] = dep_id
     end
   end
 
@@ -65,7 +68,7 @@ local function format_detail(entry, all_entries)
   lines[#lines + 1] = ""
   lines[#lines + 1] = string.format("  File: %s", entry.path)
 
-  return lines
+  return lines, dep_lines
 end
 
 --- Apply highlights to the detail buffer.
@@ -92,6 +95,20 @@ local function apply_highlights(buf, lines)
       })
     end
   end
+
+  -- Dependency lines — highlight the task ID as a link
+  for lnum, dep_id in pairs(state.dep_lines) do
+    local line = lines[lnum]
+    if line then
+      local id_start = line:find(dep_id, 1, true)
+      if id_start then
+        vim.api.nvim_buf_set_extmark(buf, ns, lnum - 1, id_start - 1, {
+          end_col = id_start - 1 + #dep_id,
+          hl_group = "Underlined",
+        })
+      end
+    end
+  end
 end
 
 --- Set up buffer-local keymaps for the detail view.
@@ -102,7 +119,25 @@ local function setup_keymaps(buf, task_id)
     vim.keymap.set("n", key, fn, { buffer = buf, nowait = true, desc = desc })
   end
 
+  map("<CR>", function()
+    local row = vim.api.nvim_win_get_cursor(0)[1]
+    local dep_id = state.dep_lines[row]
+    if dep_id then
+      -- Push current task onto history stack, then navigate
+      state.history[#state.history + 1] = task_id
+      M.open(dep_id)
+    end
+  end, "Follow dependency")
+
+  map("<C-o>", function()
+    if #state.history > 0 then
+      local prev_id = table.remove(state.history)
+      M.open(prev_id)
+    end
+  end, "Go back")
+
   map("q", function()
+    state.history = {}
     M.close()
   end, "Close detail")
 
@@ -175,7 +210,8 @@ function M.open(task_id)
   end
 
   local all_entries = fs.list_all_tasks(root)
-  local lines = format_detail(entry, all_entries)
+  local lines, dep_lines = format_detail(entry, all_entries)
+  state.dep_lines = dep_lines
 
   -- Create new buffer for this task
   local buf = vim.api.nvim_create_buf(false, true)
