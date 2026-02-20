@@ -86,9 +86,16 @@ end, {
   end,
 })
 
-vim.api.nvim_create_user_command("YaksCreate", function()
-  require("yaks").create()
-end, { desc = "Create a new task" })
+vim.api.nvim_create_user_command("YaksCreate", function(opts)
+  local parent_id = opts.args ~= "" and opts.args or nil
+  require("yaks").create({ parent_id = parent_id })
+end, {
+  desc = "Create a new task (optional: parent task ID for child creation)",
+  nargs = "?",
+  complete = function()
+    return complete_task_id()
+  end,
+})
 
 vim.api.nvim_create_user_command("YaksEdit", function(opts)
   require("yaks").edit(opts.args)

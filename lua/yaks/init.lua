@@ -112,7 +112,9 @@ function M.regrow(id)
 end
 
 --- Create a new task interactively.
-function M.create()
+---@param opts? {parent_id?: string}
+function M.create(opts)
+  opts = opts or {}
   local fs = require("yaks.fs")
   local task_mod = require("yaks.task")
 
@@ -120,6 +122,16 @@ function M.create()
   if not root then
     vim.notify("yaks: no .yaks/ directory found", vim.log.levels.WARN)
     return
+  end
+
+  -- If creating a child task, verify parent exists and generate child ID
+  local parent_id = opts.parent_id
+  if parent_id then
+    local parent_entry = fs.find_task(root, parent_id)
+    if not parent_entry then
+      vim.notify("yaks: parent task not found: " .. parent_id, vim.log.levels.ERROR)
+      return
+    end
   end
 
   vim.ui.input({ prompt = "Task title: " }, function(title)
@@ -138,8 +150,14 @@ function M.create()
         end
         local priority = tonumber(pri_str:sub(1, 1))
 
-        local config = fs.read_config(root)
-        local id = fs.generate_id(root, config.prefix or "task")
+        local id
+        if parent_id then
+          local child_num = fs.next_child_number(root, parent_id)
+          id = parent_id .. "." .. child_num
+        else
+          local config = fs.read_config(root)
+          id = fs.generate_id(root, config.prefix or "task")
+        end
         local now = fs.now_iso()
 
         local task = task_mod.new({

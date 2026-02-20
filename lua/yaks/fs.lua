@@ -148,6 +148,55 @@ function M.find_task(root, id)
   return nil
 end
 
+--- Find direct children of a task across all status directories.
+-- Children have IDs like "parent_id.N" where N is a plain integer (no dots).
+---@param root string path to .yaks/
+---@param task_id string parent task ID
+---@return table[] list of {status, task, path} entries, sorted by child number
+function M.find_children(root, task_id)
+  local prefix = task_id .. "."
+  local results = {}
+  for _, status in ipairs(M.STATUSES) do
+    local files = vim.fn.glob(root .. "/" .. status .. "/" .. prefix .. "*.yaml", false, true)
+    for _, path in ipairs(files) do
+      local stem = vim.fn.fnamemodify(path, ":t:r")
+      -- Extract suffix after the prefix (e.g. "1" from "yaks.nvim-a103.1")
+      local suffix = stem:sub(#prefix + 1)
+      -- Direct children only: suffix must be a plain integer (no dots)
+      if suffix:match("^%d+$") then
+        local task = M.read_task(path)
+        if task then
+          results[#results + 1] = {
+            status = status,
+            task = task,
+            path = path,
+            _child_num = tonumber(suffix),
+          }
+        end
+      end
+    end
+  end
+  table.sort(results, function(a, b)
+    return a._child_num < b._child_num
+  end)
+  return results
+end
+
+--- Get the next child number for creating a new child task.
+---@param root string path to .yaks/
+---@param task_id string parent task ID
+---@return integer next child number
+function M.next_child_number(root, task_id)
+  local children = M.find_children(root, task_id)
+  local max_num = 0
+  for _, child in ipairs(children) do
+    if child._child_num > max_num then
+      max_num = child._child_num
+    end
+  end
+  return max_num + 1
+end
+
 --- Move a task to a different status directory.
 -- Renames the file first, then updates the `updated` timestamp (matches yak.py behavior).
 ---@param root string path to .yaks/

@@ -193,6 +193,21 @@ function M.new(fields, id, now)
   return task
 end
 
+--- Extract the parent task ID from a child task ID.
+-- Child IDs have the form "parent.N" where N is a purely numeric suffix.
+-- Handles prefixes containing dots (e.g. "yaks.nvim-a103.1" → "yaks.nvim-a103").
+---@param task_id string
+---@return string|nil parent ID, or nil if not a child task
+function M.parent_id(task_id)
+  local dot = task_id:match(".*()%.")  -- position of rightmost dot
+  if not dot then return nil end
+  local suffix = task_id:sub(dot + 1)
+  if suffix:match("^%d+$") then
+    return task_id:sub(1, dot - 1)
+  end
+  return nil
+end
+
 --- Validate a task table has required fields with correct types.
 ---@param task table
 ---@return boolean ok

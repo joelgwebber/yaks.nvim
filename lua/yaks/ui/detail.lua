@@ -1,22 +1,24 @@
 --- Task detail view — opens in a split, reusing the same window.
 local fs = require("yaks.fs")
+local task_mod = require("yaks.task")
 
 local M = {}
 
 local ns = vim.api.nvim_create_namespace("yaks_detail")
 
 --- Persistent state for the detail window.
-local state = { win = nil, buf = nil, dep_lines = {}, history = {} }
+local state = { win = nil, buf = nil, nav_lines = {}, history = {} }
 
 --- Format a task for display in the detail buffer.
 ---@param entry table {status, task, path}
 ---@param all_entries table[] for dependency status lookup
+---@param root string path to .yaks/
 ---@return string[] lines
----@return table<integer, string> dep_lines  line number → dep task ID
-local function format_detail(entry, all_entries)
+---@return table<integer, string> nav_lines  line number → navigable task ID
+local function format_detail(entry, all_entries, root)
   local t = entry.task
   local lines = {}
-  local dep_lines = {}
+  local nav_lines = {}
 
   -- Build a map of task ID → status for dependency display
   local id_status = {}
@@ -33,6 +35,26 @@ local function format_detail(entry, all_entries)
   lines[#lines + 1] = string.format("  Created:  %s", t.created or "")
   lines[#lines + 1] = string.format("  Updated:  %s", t.updated or "")
 
+  -- Parent
+  local pid = task_mod.parent_id(t.id)
+  if pid and id_status[pid] then
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "  Parent:"
+    lines[#lines + 1] = string.format("    %s (%s)", pid, id_status[pid])
+    nav_lines[#lines] = pid
+  end
+
+  -- Children
+  local children = fs.find_children(root, t.id)
+  if #children > 0 then
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "  Children:"
+    for _, child in ipairs(children) do
+      lines[#lines + 1] = string.format("    %s (%s)", child.task.id, child.status)
+      nav_lines[#lines] = child.task.id
+    end
+  end
+
   -- Dependencies
   local deps = t.depends_on or {}
   if #deps > 0 then
@@ -41,7 +63,7 @@ local function format_detail(entry, all_entries)
     for _, dep_id in ipairs(deps) do
       local dep_status = id_status[dep_id] or "unknown"
       lines[#lines + 1] = string.format("    %s (%s)", dep_id, dep_status)
-      dep_lines[#lines] = dep_id
+      nav_lines[#lines] = dep_id
     end
   end
 
@@ -68,7 +90,7 @@ local function format_detail(entry, all_entries)
   lines[#lines + 1] = ""
   lines[#lines + 1] = string.format("  File: %s", entry.path)
 
-  return lines, dep_lines
+  return lines, nav_lines
 end
 
 --- Apply highlights to the detail buffer.
@@ -96,14 +118,14 @@ local function apply_highlights(buf, lines)
     end
   end
 
-  -- Dependency lines — highlight the task ID as a link
-  for lnum, dep_id in pairs(state.dep_lines) do
+  -- Navigable lines (deps, parent, children) — highlight the task ID as a link
+  for lnum, nav_id in pairs(state.nav_lines) do
     local line = lines[lnum]
     if line then
-      local id_start = line:find(dep_id, 1, true)
+      local id_start = line:find(nav_id, 1, true)
       if id_start then
         vim.api.nvim_buf_set_extmark(buf, ns, lnum - 1, id_start - 1, {
-          end_col = id_start - 1 + #dep_id,
+          end_col = id_start - 1 + #nav_id,
           hl_group = "Underlined",
         })
       end
@@ -121,13 +143,13 @@ local function setup_keymaps(buf, task_id)
 
   map("<CR>", function()
     local row = vim.api.nvim_win_get_cursor(0)[1]
-    local dep_id = state.dep_lines[row]
-    if dep_id then
+    local nav_id = state.nav_lines[row]
+    if nav_id then
       -- Push current task onto history stack, then navigate
       state.history[#state.history + 1] = task_id
-      M.open(dep_id)
+      M.open(nav_id)
     end
-  end, "Follow dependency")
+  end, "Follow link")
 
   map("<C-o>", function()
     if #state.history > 0 then
@@ -192,6 +214,10 @@ local function setup_keymaps(buf, task_id)
       end
     end)
   end, "Remove dependency")
+
+  map("C", function()
+    require("yaks").create({ parent_id = task_id })
+  end, "Create child task")
 end
 
 --- Open the detail view for a task, reusing an existing detail window.
@@ -210,8 +236,8 @@ function M.open(task_id)
   end
 
   local all_entries = fs.list_all_tasks(root)
-  local lines, dep_lines = format_detail(entry, all_entries)
-  state.dep_lines = dep_lines
+  local lines, nav_lines = format_detail(entry, all_entries, root)
+  state.nav_lines = nav_lines
 
   -- Create new buffer for this task
   local buf = vim.api.nvim_create_buf(false, true)

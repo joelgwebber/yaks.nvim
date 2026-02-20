@@ -25,12 +25,15 @@ local state = {
 --- Format a single task line (no status badge needed — tab provides context).
 ---@param entry table {status, task, path}
 ---@param is_tangled boolean
+---@param indent_level? integer nesting depth (0 = root, default)
 ---@return string
-local function format_task_line(entry, is_tangled)
+local function format_task_line(entry, is_tangled, indent_level)
   local t = entry.task
   local tangled_mark = is_tangled and " [tangled]" or ""
+  local indent = string.rep("  ", indent_level or 0)
   return string.format(
-    "  %-10s p%d  %-8s %s%s",
+    "  %s%-10s p%d  %-8s %s%s",
+    indent,
     t.id or "???",
     t.priority or 0,
     t.type or "task",
@@ -198,16 +201,60 @@ local function build_content(all_entries, active_tab, filter_mode)
   -- Sort by priority
   task_mod.sort_by_priority(display_entries)
 
+  -- Build tree structure: group children under parents
+  local entry_by_id = {}
+  for _, e in ipairs(display_entries) do
+    entry_by_id[e.task.id] = e
+  end
+
+  local children_of = {}  -- parent_id → list of child entries
+  local root_entries = {}  -- entries that appear at top level
+
+  for _, e in ipairs(display_entries) do
+    local pid = task_mod.parent_id(e.task.id)
+    if pid and entry_by_id[pid] then
+      -- Parent is in current display, group as child
+      if not children_of[pid] then
+        children_of[pid] = {}
+      end
+      children_of[pid][#children_of[pid] + 1] = e
+    else
+      -- Root entry (no parent, or parent in a different tab)
+      root_entries[#root_entries + 1] = e
+    end
+  end
+
+  -- Sort children by child number suffix
+  for _, kids in pairs(children_of) do
+    table.sort(kids, function(a, b)
+      local a_num = tonumber(a.task.id:match("%.(%d+)$")) or 0
+      local b_num = tonumber(b.task.id:match("%.(%d+)$")) or 0
+      return a_num < b_num
+    end)
+  end
+
+  -- Recursive render helper
+  local function render_entry(entry, indent)
+    local is_tangled = active_tab == "hairy" and task_mod.is_tangled(entry, all_entries)
+    local task_line = format_task_line(entry, is_tangled, indent)
+    lines[#lines + 1] = task_line
+    line_map[#lines] = entry.task.id
+    task_extmarks[#task_extmarks + 1] = { lnum = #lines - 1, entry = entry, is_tangled = is_tangled }
+    -- Render children
+    local kids = children_of[entry.task.id]
+    if kids then
+      for _, child in ipairs(kids) do
+        render_entry(child, indent + 1)
+      end
+    end
+  end
+
   if #display_entries == 0 then
     lines[#lines + 1] = "  (no tasks)"
     lines[#lines + 1] = ""
   else
-    for _, entry in ipairs(display_entries) do
-      local is_tangled = active_tab == "hairy" and task_mod.is_tangled(entry, all_entries)
-      local task_line = format_task_line(entry, is_tangled)
-      lines[#lines + 1] = task_line
-      line_map[#lines] = entry.task.id
-      task_extmarks[#task_extmarks + 1] = { lnum = #lines - 1, entry = entry, is_tangled = is_tangled }
+    for _, entry in ipairs(root_entries) do
+      render_entry(entry, 0)
     end
     lines[#lines + 1] = ""
   end
@@ -370,6 +417,7 @@ local function open_help()
     "  x          Shorn (→ shorn)",
     "  r          Regrow (→ hairy)",
     "  c          Create new task",
+    "  C          Create child task",
     "  e          Edit raw YAML",
     "  R          Refresh list",
     "",
@@ -485,6 +533,13 @@ local function setup_keymaps(buf)
   map(keymaps.create or "c", function()
     require("yaks").create()
   end, "Create task")
+
+  map("C", function()
+    local id = M.get_cursor_task_id()
+    if id then
+      require("yaks").create({ parent_id = id })
+    end
+  end, "Create child task")
 
   map(keymaps.edit or "e", function()
     local id = M.get_cursor_task_id()
