@@ -197,6 +197,104 @@ function M.next_child_number(root, task_id)
   return max_num + 1
 end
 
+--- Collect a task and all its descendants via BFS.
+---@param root string path to .yaks/
+---@param task_id string root task ID
+---@return table[] flat list of {old_id, entry} in BFS order
+local function collect_subtree(root, task_id)
+  local result = {}
+  local queue = { task_id }
+  while #queue > 0 do
+    local id = table.remove(queue, 1)
+    local entry = M.find_task(root, id)
+    if entry then
+      result[#result + 1] = { old_id = id, entry = entry }
+      local children = M.find_children(root, id)
+      for _, child in ipairs(children) do
+        queue[#queue + 1] = child.task.id
+      end
+    end
+  end
+  return result
+end
+
+--- Reparent a task (and its subtree) under a new parent, or unparent it.
+-- When new_parent_id is nil, the task becomes a root task with a fresh ID.
+-- When new_parent_id is provided, the task becomes a child of that parent.
+---@param root string path to .yaks/
+---@param task_id string task to reparent
+---@param new_parent_id string|nil new parent, or nil to unparent
+---@return string|nil new_id on success
+---@return string|nil error message on failure
+function M.reparent_task(root, task_id, new_parent_id)
+  -- Compute new root ID
+  local new_id
+  if new_parent_id then
+    local child_num = M.next_child_number(root, new_parent_id)
+    new_id = new_parent_id .. "." .. child_num
+  else
+    local config = M.read_config(root)
+    new_id = M.generate_id(root, config.prefix or "task")
+  end
+
+  -- Collect the full subtree
+  local subtree = collect_subtree(root, task_id)
+  if #subtree == 0 then
+    return nil, "task not found: " .. task_id
+  end
+
+  -- Build old→new ID mapping
+  local id_map = {}
+  for _, node in ipairs(subtree) do
+    if node.old_id == task_id then
+      id_map[node.old_id] = new_id
+    else
+      -- Preserve suffix after the original root ID
+      local suffix = node.old_id:sub(#task_id + 1)
+      id_map[node.old_id] = new_id .. suffix
+    end
+  end
+
+  -- Rename each file and update its ID + timestamp
+  local now = M.now_iso()
+  for _, node in ipairs(subtree) do
+    local old_path = node.entry.path
+    local mapped_id = id_map[node.old_id]
+    local new_path = root .. "/" .. node.entry.status .. "/" .. mapped_id .. ".yaml"
+    local ok = vim.fn.rename(old_path, new_path)
+    if ok ~= 0 then
+      return nil, "failed to rename " .. old_path .. " → " .. new_path
+    end
+    local task = M.read_task(new_path)
+    if task then
+      task.id = mapped_id
+      task.updated = now
+      M.write_task(new_path, task)
+    end
+  end
+
+  -- Fix depends_on references globally
+  local all = M.list_all_tasks(root)
+  for _, entry in ipairs(all) do
+    local deps = entry.task.depends_on
+    if deps then
+      local changed = false
+      for i, dep_id in ipairs(deps) do
+        if id_map[dep_id] then
+          deps[i] = id_map[dep_id]
+          changed = true
+        end
+      end
+      if changed then
+        entry.task.updated = now
+        M.write_task(entry.path, entry.task)
+      end
+    end
+  end
+
+  return new_id
+end
+
 --- Move a task to a different status directory.
 -- Renames the file first, then updates the `updated` timestamp (matches yak.py behavior).
 ---@param root string path to .yaks/

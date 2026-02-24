@@ -18,13 +18,21 @@ M.config = {
     filter_all = "a",
   },
   split = "vertical",
+  list_size = nil, -- nil = auto (60 for vertical, 20 for horizontal)
   statusline_ttl = 5,
 }
 
---- Return the split command based on config.
+--- Return the split command based on config (for the list window direction).
 ---@return string
 function M.split_cmd()
   return M.config.split == "vertical" and "vsplit" or "split"
+end
+
+--- Return the cross-axis split command (opposite of the list direction).
+-- Detail, edit, and create windows open perpendicular to the list.
+---@return string
+function M.cross_split_cmd()
+  return M.config.split == "vertical" and "split" or "vsplit"
 end
 
 --- Set up the plugin with user configuration.
@@ -173,12 +181,106 @@ function M.create(opts)
   end)
 end
 
+--- Reparent a task under a new parent via interactive selection.
+---@param id string task ID
+---@param opts? {on_complete?: fun(new_id: string)}
+function M.reparent(id, opts)
+  opts = opts or {}
+  local fs = require("yaks.fs")
+  local task_mod = require("yaks.task")
+
+  local root = fs.find_root()
+  if not root then
+    vim.notify("yaks: no .yaks/ directory found", vim.log.levels.WARN)
+    return
+  end
+
+  -- Collect subtree IDs for cycle prevention
+  local all_entries = fs.list_all_tasks(root)
+  local subtree_ids = { [id] = true }
+  local queue = { id }
+  while #queue > 0 do
+    local qid = table.remove(queue, 1)
+    local children = fs.find_children(root, qid)
+    for _, child in ipairs(children) do
+      subtree_ids[child.task.id] = true
+      queue[#queue + 1] = child.task.id
+    end
+  end
+
+  -- Build candidate list: all tasks except self and descendants
+  local candidates = {}
+  for _, entry in ipairs(all_entries) do
+    if not subtree_ids[entry.task.id] then
+      candidates[#candidates + 1] = string.format("%s: %s", entry.task.id, entry.task.title or "(untitled)")
+    end
+  end
+
+  if #candidates == 0 then
+    vim.notify("yaks: no valid parent candidates", vim.log.levels.WARN)
+    return
+  end
+
+  vim.ui.select(candidates, { prompt = "Select new parent:" }, function(choice)
+    if not choice then
+      return
+    end
+    local new_parent_id = choice:match("^([^:]+)")
+    local new_id, err = fs.reparent_task(root, id, new_parent_id)
+    if not new_id then
+      vim.notify("yaks: " .. (err or "reparent failed"), vim.log.levels.ERROR)
+      return
+    end
+    vim.notify("yaks: reparented " .. id .. " → " .. new_id, vim.log.levels.INFO)
+    M._post_write()
+    if opts.on_complete then
+      opts.on_complete(new_id)
+    end
+  end)
+end
+
+--- Unparent a task (make it a root task) with confirmation.
+---@param id string task ID
+---@param opts? {on_complete?: fun(new_id: string)}
+function M.unparent(id, opts)
+  opts = opts or {}
+  local fs = require("yaks.fs")
+  local task_mod = require("yaks.task")
+
+  local root = fs.find_root()
+  if not root then
+    vim.notify("yaks: no .yaks/ directory found", vim.log.levels.WARN)
+    return
+  end
+
+  if not task_mod.parent_id(id) then
+    vim.notify("yaks: " .. id .. " is already a root task", vim.log.levels.INFO)
+    return
+  end
+
+  vim.ui.select({ "Yes", "No" }, { prompt = "Unparent " .. id .. "?" }, function(choice)
+    if choice ~= "Yes" then
+      return
+    end
+    local new_id, err = fs.reparent_task(root, id, nil)
+    if not new_id then
+      vim.notify("yaks: " .. (err or "unparent failed"), vim.log.levels.ERROR)
+      return
+    end
+    vim.notify("yaks: unparented " .. id .. " → " .. new_id, vim.log.levels.INFO)
+    M._post_write()
+    if opts.on_complete then
+      opts.on_complete(new_id)
+    end
+  end)
+end
+
 --- Open a scratch buffer for entering a task description.
 ---@param task table
 ---@param root string
 ---@param id string
 function M._description_buffer(task, root, id)
-  vim.cmd(M.split_cmd())
+  vim.cmd(M.cross_split_cmd())
   local buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_set_current_buf(buf)
 
@@ -244,12 +346,18 @@ function M._description_buffer(task, root, id)
       vim.notify("yaks: created " .. id, vim.log.levels.INFO)
       vim.bo[buf].modified = false
 
-      -- Close the description buffer
-      if #vim.api.nvim_list_wins() > 1 then
-        vim.api.nvim_win_close(0, false)
-      end
-
-      M._post_write()
+      -- Defer close + refresh so :wq's :q doesn't cascade to the list window
+      vim.schedule(function()
+        if vim.api.nvim_buf_is_valid(buf) then
+          for _, win in ipairs(vim.api.nvim_list_wins()) do
+            if vim.api.nvim_win_get_buf(win) == buf and #vim.api.nvim_list_wins() > 1 then
+              vim.api.nvim_win_close(win, false)
+              break
+            end
+          end
+        end
+        M._post_write()
+      end)
     end,
   })
 end
@@ -271,7 +379,7 @@ function M.edit(id)
   end
 
   -- Open the YAML file in a split
-  vim.cmd(M.split_cmd() .. " " .. vim.fn.fnameescape(entry.path))
+  vim.cmd(M.cross_split_cmd() .. " " .. vim.fn.fnameescape(entry.path))
   vim.bo.filetype = "yaml"
   vim.wo.wrap = true
   vim.wo.linebreak = true

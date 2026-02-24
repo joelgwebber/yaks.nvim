@@ -1,8 +1,9 @@
 id: yaks.nvim-c0d3
-title: Auto-refresh
-type: feature
+title: <C-i/o> navigation gets broken in detail views
+type: bug
 priority: 2
-created: '2026-02-19T21:45:29Z'
-updated: '2026-02-19T21:45:29Z'
+created: '2026-02-24T17:22:47Z'
+updated: '2026-02-24T17:22:47Z'
 description: |
-  Would be nice not to have to refresh all the time. Not sure if we can easily watch for changes, but if so that would be awesome. If not, maybe we could just refresh on buffer/window focus?
+  You can select a parent/child yak to navigate to its detail view, and <C-o> takes you back as
+  expected. But then <C-i> doesn't take you back _in_, making it somewhat difficult to navigate.

@@ -6,8 +6,23 @@ local M = {}
 
 local ns = vim.api.nvim_create_namespace("yaks_detail")
 
+--- Set up highlight groups for markdown rendering in descriptions.
+local function setup_desc_highlights()
+  local links = {
+    YaksDescHeading = "Title",
+    YaksDescCode = "Special",
+    YaksDescLink = "Underlined",
+    YaksDescListMarker = "Special",
+  }
+  for group, target in pairs(links) do
+    vim.api.nvim_set_hl(0, group, { link = target, default = true })
+  end
+  vim.api.nvim_set_hl(0, "YaksDescBold", { bold = true, default = true })
+  vim.api.nvim_set_hl(0, "YaksDescItalic", { italic = true, default = true })
+end
+
 --- Persistent state for the detail window.
-local state = { win = nil, buf = nil, nav_lines = {}, history = {} }
+local state = { win = nil, buf = nil, nav_lines = {}, history = {}, forward = {} }
 
 --- Format a task for display in the detail buffer.
 ---@param entry table {status, task, path}
@@ -20,10 +35,12 @@ local function format_detail(entry, all_entries, root)
   local lines = {}
   local nav_lines = {}
 
-  -- Build a map of task ID → status for dependency display
+  -- Build maps of task ID → status and task ID → title
   local id_status = {}
+  local id_title = {}
   for _, e in ipairs(all_entries) do
     id_status[e.task.id] = e.status
+    id_title[e.task.id] = e.task.title or "(untitled)"
   end
 
   lines[#lines + 1] = string.format("Task: %s", t.id or "???")
@@ -40,7 +57,7 @@ local function format_detail(entry, all_entries, root)
   if pid and id_status[pid] then
     lines[#lines + 1] = ""
     lines[#lines + 1] = "  Parent:"
-    lines[#lines + 1] = string.format("    %s (%s)", pid, id_status[pid])
+    lines[#lines + 1] = string.format("    %s (%s) — %s", pid, id_status[pid], id_title[pid] or "(untitled)")
     nav_lines[#lines] = pid
   end
 
@@ -50,7 +67,8 @@ local function format_detail(entry, all_entries, root)
     lines[#lines + 1] = ""
     lines[#lines + 1] = "  Children:"
     for _, child in ipairs(children) do
-      lines[#lines + 1] = string.format("    %s (%s)", child.task.id, child.status)
+      local title = child.task.title or "(untitled)"
+      lines[#lines + 1] = string.format("    %s (%s) — %s", child.task.id, child.status, title)
       nav_lines[#lines] = child.task.id
     end
   end
@@ -75,9 +93,11 @@ local function format_detail(entry, all_entries, root)
   end
 
   -- Description
+  local desc_start, desc_end
   if t.description and t.description ~= "" then
     lines[#lines + 1] = ""
     lines[#lines + 1] = "  Description:"
+    desc_start = #lines + 1
     for dline in (t.description .. "\n"):gmatch("([^\n]*)\n") do
       lines[#lines + 1] = "    " .. dline
     end
@@ -85,18 +105,188 @@ local function format_detail(entry, all_entries, root)
     if lines[#lines] == "    " then
       table.remove(lines)
     end
+    desc_end = #lines
   end
 
   lines[#lines + 1] = ""
   lines[#lines + 1] = string.format("  File: %s", entry.path)
 
-  return lines, nav_lines
+  return lines, nav_lines, desc_start, desc_end
+end
+
+--- Highlight markdown syntax in description lines using extmarks with concealment.
+---@param buf integer
+---@param lines string[]
+---@param desc_start integer 1-indexed first description line
+---@param desc_end integer 1-indexed last description line
+local function highlight_description(buf, lines, desc_start, desc_end)
+  if not desc_start or not desc_end then
+    return
+  end
+
+  local set = vim.api.nvim_buf_set_extmark
+
+  for i = desc_start, desc_end do
+    local line = lines[i]
+    if not line then
+      goto continue
+    end
+    local row = i - 1 -- 0-indexed
+
+    -- All description lines have 4-space indent; content starts at col 4
+    local content = line:sub(5) -- strip "    " prefix
+    if content == "" then
+      goto continue
+    end
+
+    -- Headers: "# Heading" (after the 4-space indent)
+    local hashes, htext = content:match("^(#+)%s+(.*)")
+    if hashes then
+      -- Conceal "# " prefix
+      set(buf, ns, row, 4, { end_col = 4 + #hashes + 1, conceal = "" })
+      -- Highlight heading text
+      set(buf, ns, row, 4 + #hashes + 1, { end_col = #line, hl_group = "YaksDescHeading" })
+      goto continue
+    end
+
+    -- Track ranges covered by code spans and links to avoid bold/italic inside them
+    local covered = {}
+
+    -- Code spans: `code`
+    local pos = 1
+    while true do
+      local cs = content:find("`", pos, true)
+      if not cs then break end
+      local ce = content:find("`", cs + 1, true)
+      if not ce then break end
+      -- Conceal opening backtick
+      set(buf, ns, row, 4 + cs - 1, { end_col = 4 + cs, conceal = "" })
+      -- Highlight code content
+      if ce > cs + 1 then
+        set(buf, ns, row, 4 + cs, { end_col = 4 + ce - 1, hl_group = "YaksDescCode" })
+      end
+      -- Conceal closing backtick
+      set(buf, ns, row, 4 + ce - 1, { end_col = 4 + ce, conceal = "" })
+      covered[#covered + 1] = { cs, ce }
+      pos = ce + 1
+    end
+
+    -- Links: [text](url)
+    pos = 1
+    while true do
+      local ls = content:find("%[", pos)
+      if not ls then break end
+      local le = content:find("%]%(", ls + 1)
+      if not le then break end
+      local ue = content:find("%)", le + 2)
+      if not ue then break end
+      -- Conceal opening [
+      set(buf, ns, row, 4 + ls - 1, { end_col = 4 + ls, conceal = "" })
+      -- Highlight link text
+      if le > ls + 1 then
+        set(buf, ns, row, 4 + ls, { end_col = 4 + le - 1, hl_group = "YaksDescLink" })
+      end
+      -- Conceal ](url)
+      set(buf, ns, row, 4 + le - 1, { end_col = 4 + ue, conceal = "" })
+      covered[#covered + 1] = { ls, ue }
+      pos = ue + 1
+    end
+
+    -- Helper: check if a position falls inside a covered range
+    local function is_covered(p)
+      for _, r in ipairs(covered) do
+        if p >= r[1] and p <= r[2] then return true end
+      end
+      return false
+    end
+
+    -- Bold: **text**
+    pos = 1
+    while true do
+      local bs = content:find("%*%*", pos)
+      if not bs then break end
+      if is_covered(bs) then pos = bs + 2; goto nextbold end
+      local be = content:find("%*%*", bs + 2)
+      if not be then break end
+      if is_covered(be) then pos = be + 2; goto nextbold end
+      -- Conceal opening **
+      set(buf, ns, row, 4 + bs - 1, { end_col = 4 + bs + 1, conceal = "" })
+      -- Highlight bold content
+      if be > bs + 2 then
+        set(buf, ns, row, 4 + bs + 1, { end_col = 4 + be - 1, hl_group = "YaksDescBold" })
+      end
+      -- Conceal closing **
+      set(buf, ns, row, 4 + be - 1, { end_col = 4 + be + 1, conceal = "" })
+      covered[#covered + 1] = { bs, be + 1 }
+      pos = be + 2
+      ::nextbold::
+    end
+
+    -- Italic: *text* (single *, not preceded/followed by *)
+    pos = 1
+    while true do
+      local is_pos = content:find("%*", pos)
+      if not is_pos then break end
+      if is_covered(is_pos) then pos = is_pos + 1; goto nextitalic end
+      -- Skip if part of ** (bold)
+      if content:sub(is_pos + 1, is_pos + 1) == "*" then pos = is_pos + 2; goto nextitalic end
+      if is_pos > 1 and content:sub(is_pos - 1, is_pos - 1) == "*" then pos = is_pos + 1; goto nextitalic end
+      -- Find closing *
+      local ie = is_pos + 1
+      while ie <= #content do
+        local found = content:find("%*", ie)
+        if not found then ie = nil; break end
+        -- Skip ** at close
+        if content:sub(found + 1, found + 1) == "*" or (found > 1 and content:sub(found - 1, found - 1) == "*") then
+          ie = found + 1
+        else
+          ie = found
+          break
+        end
+      end
+      if not ie or is_covered(ie) then pos = is_pos + 1; goto nextitalic end
+      set(buf, ns, row, 4 + is_pos - 1, { end_col = 4 + is_pos, conceal = "" })
+      if ie > is_pos + 1 then
+        set(buf, ns, row, 4 + is_pos, { end_col = 4 + ie - 1, hl_group = "YaksDescItalic" })
+      end
+      set(buf, ns, row, 4 + ie - 1, { end_col = 4 + ie, conceal = "" })
+      pos = ie + 1
+      ::nextitalic::
+    end
+
+    -- Italic: _text_
+    pos = 1
+    while true do
+      local us = content:find("_", pos, true)
+      if not us then break end
+      if is_covered(us) then pos = us + 1; goto nextunder end
+      local ue_pos = content:find("_", us + 1, true)
+      if not ue_pos then break end
+      if is_covered(ue_pos) then pos = ue_pos + 1; goto nextunder end
+      set(buf, ns, row, 4 + us - 1, { end_col = 4 + us, conceal = "" })
+      if ue_pos > us + 1 then
+        set(buf, ns, row, 4 + us, { end_col = 4 + ue_pos - 1, hl_group = "YaksDescItalic" })
+      end
+      set(buf, ns, row, 4 + ue_pos - 1, { end_col = 4 + ue_pos, conceal = "" })
+      pos = ue_pos + 1
+      ::nextunder::
+    end
+
+    -- List markers: "- " or "* " at start of content
+    if content:match("^[%-%*]%s") then
+      set(buf, ns, row, 4, { end_col = 5, hl_group = "YaksDescListMarker" })
+    end
+
+    ::continue::
+  end
 end
 
 --- Apply highlights to the detail buffer.
 ---@param buf integer
 ---@param lines string[]
-local function apply_highlights(buf, lines)
+---@param desc_start integer|nil
+---@param desc_end integer|nil
+local function apply_highlights(buf, lines, desc_start, desc_end)
   vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
 
   -- Title line
@@ -131,6 +321,8 @@ local function apply_highlights(buf, lines)
       end
     end
   end
+
+  highlight_description(buf, lines, desc_start, desc_end)
 end
 
 --- Set up buffer-local keymaps for the detail view.
@@ -145,21 +337,32 @@ local function setup_keymaps(buf, task_id)
     local row = vim.api.nvim_win_get_cursor(0)[1]
     local nav_id = state.nav_lines[row]
     if nav_id then
-      -- Push current task onto history stack, then navigate
+      -- Push current task onto history stack, clear forward stack, then navigate
       state.history[#state.history + 1] = task_id
+      state.forward = {}
       M.open(nav_id)
     end
   end, "Follow link")
 
   map("<C-o>", function()
     if #state.history > 0 then
+      state.forward[#state.forward + 1] = task_id
       local prev_id = table.remove(state.history)
       M.open(prev_id)
     end
   end, "Go back")
 
+  map("<C-i>", function()
+    if #state.forward > 0 then
+      state.history[#state.history + 1] = task_id
+      local next_id = table.remove(state.forward)
+      M.open(next_id)
+    end
+  end, "Go forward")
+
   map("q", function()
     state.history = {}
+    state.forward = {}
     M.close()
   end, "Close detail")
 
@@ -218,6 +421,22 @@ local function setup_keymaps(buf, task_id)
   map("C", function()
     require("yaks").create({ parent_id = task_id })
   end, "Create child task")
+
+  map("P", function()
+    require("yaks").reparent(task_id, {
+      on_complete = function(new_id)
+        M.open(new_id)
+      end,
+    })
+  end, "Reparent task")
+
+  map("U", function()
+    require("yaks").unparent(task_id, {
+      on_complete = function(new_id)
+        M.open(new_id)
+      end,
+    })
+  end, "Unparent task")
 end
 
 --- Open the detail view for a task, reusing an existing detail window.
@@ -236,7 +455,7 @@ function M.open(task_id)
   end
 
   local all_entries = fs.list_all_tasks(root)
-  local lines, nav_lines = format_detail(entry, all_entries, root)
+  local lines, nav_lines, desc_start, desc_end = format_detail(entry, all_entries, root)
   state.nav_lines = nav_lines
 
   -- Create new buffer for this task
@@ -259,7 +478,7 @@ function M.open(task_id)
     vim.api.nvim_win_set_buf(state.win, buf)
     vim.api.nvim_set_current_win(state.win)
   else
-    vim.cmd(require("yaks").split_cmd())
+    vim.cmd(require("yaks").cross_split_cmd())
     vim.api.nvim_set_current_buf(buf)
     state.win = vim.api.nvim_get_current_win()
     -- Window options (set once on new split, not on reuse)
@@ -269,7 +488,12 @@ function M.open(task_id)
 
   state.buf = buf
 
-  apply_highlights(buf, lines)
+  -- Conceal settings for markdown rendering in descriptions
+  vim.wo[state.win].conceallevel = 2
+  vim.wo[state.win].concealcursor = "nc"
+
+  setup_desc_highlights()
+  apply_highlights(buf, lines, desc_start, desc_end)
   setup_keymaps(buf, task_id)
 
   -- Clear state when window is closed manually

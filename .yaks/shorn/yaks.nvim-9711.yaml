@@ -1,8 +1,8 @@
 id: yaks.nvim-9711
-title: Allow :wq in edit mode.
+title: :wq in edit mode shouldn't close the whole yaks view
 type: bug
 priority: 2
-created: '2026-02-19T21:38:15Z'
-updated: '2026-02-19T21:38:15Z'
+created: '2026-02-24T17:22:09Z'
+updated: '2026-02-24T17:22:09Z'
 description: |
-  When editing a yak, if you :wq, it closes _both_ the edit window and the Yaks window. Let's not.
+  It should only close the editor window, not the parent :Yaks view.

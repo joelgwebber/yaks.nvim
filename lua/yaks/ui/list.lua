@@ -418,6 +418,8 @@ local function open_help()
     "  r          Regrow (→ hairy)",
     "  c          Create new task",
     "  C          Create child task",
+    "  P          Reparent task",
+    "  U          Unparent task",
     "  e          Edit raw YAML",
     "  R          Refresh list",
     "",
@@ -541,6 +543,20 @@ local function setup_keymaps(buf)
     end
   end, "Create child task")
 
+  map("P", function()
+    local id = M.get_cursor_task_id()
+    if id then
+      require("yaks").reparent(id)
+    end
+  end, "Reparent task")
+
+  map("U", function()
+    local id = M.get_cursor_task_id()
+    if id then
+      require("yaks").unparent(id)
+    end
+  end, "Unparent task")
+
   map(keymaps.edit or "e", function()
     local id = M.get_cursor_task_id()
     if id then
@@ -601,6 +617,18 @@ function M.set_filter(mode)
   M.refresh()
 end
 
+--- Open a split for the list buffer and resize it.
+---@param config table plugin config
+function M._open_split(config)
+  local is_vertical = config.split == "vertical"
+  local size = config.list_size or (is_vertical and 60 or 20)
+  if is_vertical then
+    vim.cmd("rightbelow " .. size .. "vsplit")
+  else
+    vim.cmd("botright " .. size .. "split")
+  end
+end
+
 --- Open (or focus) the task list buffer.
 ---@param opts? {filter?: string}
 function M.open(opts)
@@ -612,6 +640,8 @@ function M.open(opts)
     state.active_tab = "hairy"
   end
 
+  local config = require("yaks").config
+
   -- Reuse existing buffer if valid
   if state.buf and vim.api.nvim_buf_is_valid(state.buf) then
     -- Find or create a window for it
@@ -622,6 +652,8 @@ function M.open(opts)
         return
       end
     end
+    -- Buffer exists but no window — open in a split
+    M._open_split(config)
     vim.api.nvim_set_current_buf(state.buf)
     M.refresh()
     return
@@ -635,7 +667,8 @@ function M.open(opts)
   vim.bo[state.buf].swapfile = false
   vim.bo[state.buf].filetype = "yaks"
 
-  -- Show in current window
+  -- Show in a split
+  M._open_split(config)
   vim.api.nvim_set_current_buf(state.buf)
 
   setup_keymaps(state.buf)
