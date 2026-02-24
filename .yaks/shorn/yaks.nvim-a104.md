@@ -1,6 +1,8 @@
+---
 id: yaks.nvim-a104
 title: Push to remote repo
 type: task
 priority: 2
 created: '2026-02-18T15:11:46Z'
 updated: '2026-02-19T21:35:03Z'
+---

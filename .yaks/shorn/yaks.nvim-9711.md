@@ -1,0 +1,10 @@
+---
+id: yaks.nvim-9711
+title: Allow :wq in edit mode.
+type: bug
+priority: 2
+created: '2026-02-19T21:38:15Z'
+updated: '2026-02-19T21:38:15Z'
+---
+
+When editing a yak, if you :wq, it closes _both_ the edit window and the Yaks window. Let's not.

@@ -1,0 +1,10 @@
+---
+id: yaks.nvim-b2e7
+title: Don't forcibly resize window when opening details.
+type: bug
+priority: 2
+created: '2026-02-19T21:37:34Z'
+updated: '2026-02-19T21:37:34Z'
+---
+
+This is really jarring -- you get a nice layout, and it just jumps around whenever you open a yak.

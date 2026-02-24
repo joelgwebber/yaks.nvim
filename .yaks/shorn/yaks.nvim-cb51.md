@@ -1,0 +1,11 @@
+---
+id: yaks.nvim-cb51
+title: Affordance for following dependencies
+type: feature
+priority: 2
+created: '2026-02-19T21:35:58Z'
+updated: '2026-02-19T21:35:58Z'
+---
+
+It would be nice to be able to [enter] on a dependency in the detail view, and navigate to that yak.
+And hopefully we can have that work with vim's navigation stack, so I can <C-o> my way back out.

@@ -1,0 +1,12 @@
+---
+id: yaks.nvim-a109
+title: Tabbed status navigation in list view
+type: feature
+priority: 1
+created: '2026-02-18T16:00:00Z'
+updated: '2026-02-18T16:00:00Z'
+---
+
+Replace all-statuses-at-once list with tabbed view showing one status
+at a time. Tab/Shift-Tab cycles hairy/shaving/shorn. Filters apply
+only on hairy tab. Tab bar shows counts and active highlight.

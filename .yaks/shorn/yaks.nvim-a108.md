@@ -1,0 +1,12 @@
+---
+id: yaks.nvim-a108
+title: Detail window reuse for successive opens
+type: feature
+priority: 2
+created: '2026-02-18T16:00:00Z'
+updated: '2026-02-18T16:00:00Z'
+---
+
+Track detail window/buffer in module state. Reuse existing detail
+window when opening a new task instead of stacking splits. Clean up
+state on WinClosed.
