@@ -34,9 +34,20 @@ end
 
 -- ── User commands ─────────────────────────────────────────────────
 
-vim.api.nvim_create_user_command("Yaks", function()
-  require("yaks").list()
-end, { desc = "Open Yaks task list" })
+vim.api.nvim_create_user_command("Yaks", function(opts)
+  local split = opts.fargs[1]
+  if split and split ~= "vertical" and split ~= "horizontal" then
+    vim.notify("Yaks: direction must be 'vertical' or 'horizontal'", vim.log.levels.ERROR)
+    return
+  end
+  require("yaks").list({ split = split })
+end, {
+  nargs = "?",
+  complete = function()
+    return { "vertical", "horizontal" }
+  end,
+  desc = "Open Yaks task list",
+})
 
 vim.api.nvim_create_user_command("YaksNext", function()
   require("yaks").next()

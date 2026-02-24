@@ -36,7 +36,7 @@ Run `:Yaks` in any project with a `.yaks/` directory to open the task list.
 
 | Command | Description |
 |---------|-------------|
-| `:Yaks` | Open the task list buffer |
+| `:Yaks [vertical\|horizontal]` | Open the task list (optional direction override) |
 | `:YaksNext` | Show tasks ready to shave (all deps met) |
 | `:YaksTangled` | Show tasks blocked by unshorn dependencies |
 | `:YaksShow {id}` | Show task details in a split |
@@ -61,6 +61,9 @@ All commands that take a task ID support tab-completion.
 | `x` | Shorn (complete) |
 | `r` | Regrow (reopen) |
 | `c` | Create new task |
+| `C` | Create child task |
+| `P` | Reparent task |
+| `U` | Unparent task |
 | `e` | Edit raw YAML |
 | `R` | Refresh |
 | `n` | Toggle "next" filter |
@@ -76,8 +79,14 @@ All commands that take a task ID support tab-completion.
 | `q` | Close |
 | `e` | Edit raw YAML |
 | `s` / `x` / `r` | Status transitions |
+| `C` | Create child task |
+| `P` | Reparent task |
+| `U` | Unparent task |
 | `da` | Add dependency |
 | `dr` | Remove dependency |
+| `<CR>` | Follow link (parent/child/dep) |
+| `<C-o>` | Navigate back |
+| `<C-i>` | Navigate forward |
 
 ### Statusline
 
@@ -108,6 +117,9 @@ require('yaks').setup({
     filter_tangled = 't',
     filter_all = 'a',
   },
-  statusline_ttl = 5, -- seconds to cache statusline data
+  split = 'vertical',   -- list split direction: 'vertical' or 'horizontal'
+                         -- detail/edit/create open in the opposite direction
+  list_size = nil,       -- list split size in columns/rows (default: 60 vertical, 20 horizontal)
+  statusline_ttl = 5,    -- seconds to cache statusline data
 })
 ```

@@ -618,10 +618,11 @@ function M.set_filter(mode)
 end
 
 --- Open a split for the list buffer and resize it.
----@param config table plugin config
-function M._open_split(config)
-  local is_vertical = config.split == "vertical"
-  local size = config.list_size or (is_vertical and 60 or 20)
+---@param split string "vertical" or "horizontal"
+---@param list_size? integer
+local function open_split(split, list_size)
+  local is_vertical = split == "vertical"
+  local size = list_size or (is_vertical and 60 or 20)
   if is_vertical then
     vim.cmd("rightbelow " .. size .. "vsplit")
   else
@@ -630,7 +631,7 @@ function M._open_split(config)
 end
 
 --- Open (or focus) the task list buffer.
----@param opts? {filter?: string}
+---@param opts? {filter?: string, split?: string}
 function M.open(opts)
   setup_highlights()
 
@@ -641,6 +642,7 @@ function M.open(opts)
   end
 
   local config = require("yaks").config
+  local split = (opts and opts.split) or config.split or "vertical"
 
   -- Reuse existing buffer if valid
   if state.buf and vim.api.nvim_buf_is_valid(state.buf) then
@@ -653,7 +655,7 @@ function M.open(opts)
       end
     end
     -- Buffer exists but no window — open in a split
-    M._open_split(config)
+    open_split(split, config.list_size)
     vim.api.nvim_set_current_buf(state.buf)
     M.refresh()
     return
@@ -668,7 +670,7 @@ function M.open(opts)
   vim.bo[state.buf].filetype = "yaks"
 
   -- Show in a split
-  M._open_split(config)
+  open_split(split, config.list_size)
   vim.api.nvim_set_current_buf(state.buf)
 
   setup_keymaps(state.buf)

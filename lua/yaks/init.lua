@@ -45,8 +45,9 @@ end
 -- ── Commands ──────────────────────────────────────────────────────
 
 --- Open the task list buffer.
-function M.list()
-  require("yaks.ui.list").open()
+---@param opts? {split?: string}
+function M.list(opts)
+  require("yaks.ui.list").open(opts)
 end
 
 --- Open the task list filtered to "next" tasks.
