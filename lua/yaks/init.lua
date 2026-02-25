@@ -30,9 +30,12 @@ end
 
 --- Return the cross-axis split command (opposite of the list direction).
 -- Detail, edit, and create windows open perpendicular to the list.
+-- Uses the effective list split direction if available, falling back to config.
 ---@return string
 function M.cross_split_cmd()
-  return M.config.split == "vertical" and "split" or "vsplit"
+  local list_split = require("yaks.ui.list").get_split()
+  local split = list_split or M.config.split or "vertical"
+  return split == "vertical" and "split" or "vsplit"
 end
 
 --- Set up the plugin with user configuration.

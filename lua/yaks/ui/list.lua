@@ -20,6 +20,7 @@ local state = {
   active_tab = "hairy",
   help_win = nil,
   help_buf = nil,
+  split = nil, -- effective split direction for this list instance
 }
 
 --- Format a single task line (no status badge needed — tab provides context).
@@ -643,6 +644,7 @@ function M.open(opts)
 
   local config = require("yaks").config
   local split = (opts and opts.split) or config.split or "vertical"
+  state.split = split
 
   -- Reuse existing buffer if valid
   if state.buf and vim.api.nvim_buf_is_valid(state.buf) then
@@ -733,6 +735,12 @@ function M.get_buf()
     return state.buf
   end
   return nil
+end
+
+--- Get the effective split direction of the current list instance.
+---@return string|nil "vertical" or "horizontal"
+function M.get_split()
+  return state.split
 end
 
 return M
