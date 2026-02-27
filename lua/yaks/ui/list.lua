@@ -27,10 +27,16 @@ local state = {
 ---@param entry table {status, task, path}
 ---@param is_tangled boolean
 ---@param indent_level? integer nesting depth (0 = root, default)
+---@param is_ghost? boolean whether this is a ghost node from another tab
 ---@return string
-local function format_task_line(entry, is_tangled, indent_level)
+local function format_task_line(entry, is_tangled, indent_level, is_ghost)
   local t = entry.task
-  local tangled_mark = is_tangled and " [tangled]" or ""
+  local suffix = ""
+  if is_ghost then
+    suffix = " [" .. (entry.status or "?") .. "]"
+  elseif is_tangled then
+    suffix = " [tangled]"
+  end
   local indent = string.rep("  ", indent_level or 0)
   return string.format(
     "  %s%-10s p%d  %-8s %s%s",
@@ -39,7 +45,7 @@ local function format_task_line(entry, is_tangled, indent_level)
     t.priority or 0,
     t.type or "task",
     t.title or "(untitled)",
-    tangled_mark
+    suffix
   )
 end
 
@@ -59,6 +65,7 @@ local function setup_highlights()
     YaksStatusHairy = "WarningMsg",
     YaksStatusShaving = "MoreMsg",
     YaksStatusShorn = "Comment",
+    YaksGhost = "Comment",
     YaksHelp = "Comment",
   }
   for group, target in pairs(links) do
@@ -72,7 +79,16 @@ end
 ---@param line string the formatted line text
 ---@param entry table {status, task}
 ---@param is_tangled boolean
-local function highlight_task_line(buf, lnum, line, entry, is_tangled)
+---@param is_ghost? boolean
+local function highlight_task_line(buf, lnum, line, entry, is_tangled, is_ghost)
+  if is_ghost then
+    vim.api.nvim_buf_set_extmark(buf, ns, lnum, 0, {
+      end_col = #line,
+      hl_group = "YaksGhost",
+    })
+    return
+  end
+
   local t = entry.task
 
   -- Task ID highlight
@@ -202,28 +218,98 @@ local function build_content(all_entries, active_tab, filter_mode)
   -- Sort by priority
   task_mod.sort_by_priority(display_entries)
 
+  -- Build cross-tab lookup maps for ghost discovery
+  local all_by_id = {}
+  local all_children_of = {}
+  for _, e in ipairs(all_entries) do
+    all_by_id[e.task.id] = e
+    local pid = task_mod.parent_id(e.task.id)
+    if pid then
+      if not all_children_of[pid] then
+        all_children_of[pid] = {}
+      end
+      all_children_of[pid][#all_children_of[pid] + 1] = e
+    end
+  end
+
+  -- Discover ghosts: tasks from other tabs needed for tree coherence
+  local display_set = {}
+  for _, e in ipairs(display_entries) do
+    display_set[e.task.id] = true
+  end
+  local ghost_ids = {}
+
+  -- Ghost ancestors: walk up parent chain from each display entry
+  for _, e in ipairs(display_entries) do
+    local pid = task_mod.parent_id(e.task.id)
+    while pid do
+      if not display_set[pid] and all_by_id[pid] and not ghost_ids[pid] then
+        ghost_ids[pid] = true
+      end
+      pid = task_mod.parent_id(pid)
+    end
+  end
+
+  -- Ghost descendants: BFS from real entries + ghost ancestors
+  local queue = {}
+  for _, e in ipairs(display_entries) do
+    queue[#queue + 1] = e.task.id
+  end
+  for id in pairs(ghost_ids) do
+    queue[#queue + 1] = id
+  end
+  local qi = 1
+  while qi <= #queue do
+    local id = queue[qi]
+    qi = qi + 1
+    local kids = all_children_of[id]
+    if kids then
+      for _, kid in ipairs(kids) do
+        if not display_set[kid.task.id] and not ghost_ids[kid.task.id] then
+          ghost_ids[kid.task.id] = true
+          queue[#queue + 1] = kid.task.id
+        end
+      end
+    end
+  end
+
   -- Build tree structure: group children under parents
   local entry_by_id = {}
   for _, e in ipairs(display_entries) do
     entry_by_id[e.task.id] = e
   end
+  -- Merge ghosts into the tree
+  for ghost_id in pairs(ghost_ids) do
+    entry_by_id[ghost_id] = all_by_id[ghost_id]
+  end
 
   local children_of = {}  -- parent_id → list of child entries
   local root_entries = {}  -- entries that appear at top level
 
-  for _, e in ipairs(display_entries) do
-    local pid = task_mod.parent_id(e.task.id)
+  for id, e in pairs(entry_by_id) do
+    local pid = task_mod.parent_id(id)
     if pid and entry_by_id[pid] then
-      -- Parent is in current display, group as child
+      -- Parent is in current display (real or ghost), group as child
       if not children_of[pid] then
         children_of[pid] = {}
       end
       children_of[pid][#children_of[pid] + 1] = e
     else
-      -- Root entry (no parent, or parent in a different tab)
+      -- Root entry (no parent, or parent not in display)
       root_entries[#root_entries + 1] = e
     end
   end
+
+  -- Sort roots by priority, then ghosts after real entries
+  table.sort(root_entries, function(a, b)
+    local a_ghost = ghost_ids[a.task.id] and 1 or 0
+    local b_ghost = ghost_ids[b.task.id] and 1 or 0
+    if a_ghost ~= b_ghost then return a_ghost < b_ghost end
+    local ap = a.task.priority or 99
+    local bp = b.task.priority or 99
+    if ap ~= bp then return ap < bp end
+    return (a.task.id or "") < (b.task.id or "")
+  end)
 
   -- Sort children by child number suffix
   for _, kids in pairs(children_of) do
@@ -236,11 +322,15 @@ local function build_content(all_entries, active_tab, filter_mode)
 
   -- Recursive render helper
   local function render_entry(entry, indent)
-    local is_tangled = active_tab == "hairy" and task_mod.is_tangled(entry, all_entries)
-    local task_line = format_task_line(entry, is_tangled, indent)
+    local is_ghost = ghost_ids[entry.task.id] or false
+    local is_tangled = not is_ghost and active_tab == "hairy"
+      and task_mod.is_tangled(entry, all_entries)
+    local task_line = format_task_line(entry, is_tangled, indent, is_ghost)
     lines[#lines + 1] = task_line
     line_map[#lines] = entry.task.id
-    task_extmarks[#task_extmarks + 1] = { lnum = #lines - 1, entry = entry, is_tangled = is_tangled }
+    task_extmarks[#task_extmarks + 1] = {
+      lnum = #lines - 1, entry = entry, is_tangled = is_tangled, is_ghost = is_ghost,
+    }
     -- Render children
     local kids = children_of[entry.task.id]
     if kids then
@@ -250,7 +340,7 @@ local function build_content(all_entries, active_tab, filter_mode)
     end
   end
 
-  if #display_entries == 0 then
+  if #display_entries == 0 and not next(ghost_ids) then
     lines[#lines + 1] = "  (no tasks)"
     lines[#lines + 1] = ""
   else
@@ -292,7 +382,7 @@ local function apply_extmarks(buf, lines, task_extmarks, tab_segments)
 
   -- Task line highlights
   for _, em in ipairs(task_extmarks) do
-    highlight_task_line(buf, em.lnum, lines[em.lnum + 1], em.entry, em.is_tangled)
+    highlight_task_line(buf, em.lnum, lines[em.lnum + 1], em.entry, em.is_tangled, em.is_ghost)
   end
 end
 
