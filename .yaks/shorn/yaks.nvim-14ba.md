@@ -1,10 +1,19 @@
 ---
 id: yaks.nvim-14ba
-title: test1
-type: task
-priority: 1
-created: '2026-02-20T04:41:15Z'
-updated: '2026-02-20T04:46:01Z'
+title: Handle mixed child states better.
+type: bug
+priority: 2
+created: '2026-02-25T21:29:19Z'
+updated: '2026-02-26T23:45:10Z'
 ---
 
-...
+When parent/child states are mixed (e.g., parent is shaving, some children are shaving, others are
+hairy or shorn), the UI renders oddly. E.g., if the parent is shaving, it will show up in the right
+place. But only its shaving children are visible there; which makes sense, but is also confusing.
+
+Then if some children are still hairy, they show up as apparently-orphaned in the hairy tab, because
+their parent isn't present.
+
+We should discuss a coherent theory of how we want these situations to render. E.g., maybe with
+ghost nodes to capture the ones not present in a given state, but needed for coherence? Open to
+other ideas as well.

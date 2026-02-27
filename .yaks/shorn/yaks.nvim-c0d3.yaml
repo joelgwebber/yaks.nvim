@@ -1,9 +1,0 @@
-id: yaks.nvim-c0d3
-title: <C-i/o> navigation gets broken in detail views
-type: bug
-priority: 2
-created: '2026-02-24T17:22:47Z'
-updated: '2026-02-24T17:22:47Z'
-description: |
-  You can select a parent/child yak to navigate to its detail view, and <C-o> takes you back as
-  expected. But then <C-i> doesn't take you back _in_, making it somewhat difficult to navigate.

@@ -1,9 +1,0 @@
-id: yaks.nvim-cb51
-title: Have :Yaks open a split
-type: feature
-priority: 2
-created: '2026-02-24T17:19:20Z'
-updated: '2026-02-24T17:19:20Z'
-description: |
-  It should be an bottom or right split, based on whether the layout is configured to be horz or vert.
-  The default size should be configurable, defaulting to 20 (bottom split) or 60 (right split).

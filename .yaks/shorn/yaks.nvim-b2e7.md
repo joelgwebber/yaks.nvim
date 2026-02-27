@@ -1,10 +1,20 @@
 ---
 id: yaks.nvim-b2e7
-title: Don't forcibly resize window when opening details.
-type: bug
+title: Hoist parent/child yak titles into details view
+type: feature
 priority: 2
-created: '2026-02-19T21:37:34Z'
-updated: '2026-02-19T21:37:34Z'
+created: '2026-02-24T17:21:08Z'
+updated: '2026-02-24T17:21:08Z'
 ---
 
-This is really jarring -- you get a nice layout, and it just jumps around whenever you open a yak.
+They currently display as just:
+
+  Parent:
+    gnusto-d4ui (hairy)
+
+  Children:
+    gnusto-d4ui.1 (hairy)
+    gnusto-d4ui.2 (hairy)
+    gnusto-d4ui.3 (hairy)
+
+Which is hard to make sense of. We should hoist the titles into those links.
