@@ -345,7 +345,7 @@ function M._description_buffer(task, root, id)
       end
 
       local fs = require("yaks.fs")
-      local path = root .. "/hairy/" .. id .. ".yaml"
+      local path = root .. "/hairy/" .. id .. ".md"
       fs.write_task(path, task)
       vim.notify("yaks: created " .. id, vim.log.levels.INFO)
       vim.bo[buf].modified = false
@@ -382,9 +382,9 @@ function M.edit(id)
     return
   end
 
-  -- Open the YAML file in a split
+  -- Open the task file in a split
   vim.cmd(M.cross_split_cmd() .. " " .. vim.fn.fnameescape(entry.path))
-  vim.bo.filetype = "yaml"
+  vim.bo.filetype = entry.path:sub(-3) == ".md" and "markdown" or "yaml"
   vim.wo.wrap = true
   vim.wo.linebreak = true
 

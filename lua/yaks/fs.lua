@@ -13,6 +13,41 @@ M.STATUS_LABELS = {
   shorn = "Shorn",
 }
 
+--- Supported task file extensions, in priority order.
+M.TASK_EXTENSIONS = { ".yaml", ".md" }
+
+--- Glob task files in a directory across all supported extensions.
+---@param dir string
+---@return string[] sorted file paths
+local function glob_task_files(dir)
+  local files = {}
+  for _, ext in ipairs(M.TASK_EXTENSIONS) do
+    local matches = vim.fn.glob(dir .. "/*" .. ext, false, true)
+    for _, f in ipairs(matches) do
+      files[#files + 1] = f
+    end
+  end
+  table.sort(files)
+  return files
+end
+
+--- Check if a path is a .md task file.
+---@param path string
+---@return boolean
+local function is_md_file(path)
+  return path:sub(-3) == ".md"
+end
+
+--- Return the extension of a task file path.
+---@param path string
+---@return string ".yaml" or ".md"
+local function task_extension(path)
+  if is_md_file(path) then
+    return ".md"
+  end
+  return ".yaml"
+end
+
 --- Find the .yaks/ root directory, searching upward from start_dir.
 ---@param start_dir? string defaults to cwd
 ---@return string|nil root path to the .yaks/ directory
@@ -73,7 +108,7 @@ function M._write_file(path, content)
   return true
 end
 
---- Read and parse a task YAML file.
+--- Read and parse a task file (.yaml or .md).
 ---@param path string
 ---@return table|nil task
 function M.read_task(path)
@@ -81,16 +116,24 @@ function M.read_task(path)
   if not content then
     return nil
   end
+  if is_md_file(path) then
+    return parser.parse_frontmatter(content)
+  end
   return parser.parse(content)
 end
 
---- Serialize and write a task to a file.
+--- Serialize and write a task to a file (.yaml or .md).
 ---@param path string
 ---@param task table
 ---@return boolean ok
 function M.write_task(path, task)
-  local yaml = parser.serialize(task)
-  return M._write_file(path, yaml)
+  local content
+  if is_md_file(path) then
+    content = parser.serialize_frontmatter(task)
+  else
+    content = parser.serialize(task)
+  end
+  return M._write_file(path, content)
 end
 
 --- List tasks in a specific status directory.
@@ -99,8 +142,7 @@ end
 ---@return table[] list of {status, task, path} entries
 function M.list_tasks(root, status)
   local dir = root .. "/" .. status
-  local files = vim.fn.glob(dir .. "/*.yaml", false, true)
-  table.sort(files)
+  local files = glob_task_files(dir)
   local results = {}
   for _, path in ipairs(files) do
     local task = M.read_task(path)
@@ -135,14 +177,16 @@ end
 ---@return table|nil entry {status, task, path} or nil
 function M.find_task(root, id)
   for _, status in ipairs(M.STATUSES) do
-    local path = root .. "/" .. status .. "/" .. id .. ".yaml"
-    local task = M.read_task(path)
-    if task then
-      return {
-        status = status,
-        task = task,
-        path = path,
-      }
+    for _, ext in ipairs(M.TASK_EXTENSIONS) do
+      local path = root .. "/" .. status .. "/" .. id .. ext
+      local task = M.read_task(path)
+      if task then
+        return {
+          status = status,
+          task = task,
+          path = path,
+        }
+      end
     end
   end
   return nil
@@ -157,7 +201,13 @@ function M.find_children(root, task_id)
   local prefix = task_id .. "."
   local results = {}
   for _, status in ipairs(M.STATUSES) do
-    local files = vim.fn.glob(root .. "/" .. status .. "/" .. prefix .. "*.yaml", false, true)
+    local files = {}
+    for _, ext in ipairs(M.TASK_EXTENSIONS) do
+      local matches = vim.fn.glob(root .. "/" .. status .. "/" .. prefix .. "*" .. ext, false, true)
+      for _, f in ipairs(matches) do
+        files[#files + 1] = f
+      end
+    end
     for _, path in ipairs(files) do
       local stem = vim.fn.fnamemodify(path, ":t:r")
       -- Extract suffix after the prefix (e.g. "1" from "yaks.nvim-a103.1")
@@ -260,7 +310,8 @@ function M.reparent_task(root, task_id, new_parent_id)
   for _, node in ipairs(subtree) do
     local old_path = node.entry.path
     local mapped_id = id_map[node.old_id]
-    local new_path = root .. "/" .. node.entry.status .. "/" .. mapped_id .. ".yaml"
+    local ext = task_extension(old_path)
+    local new_path = root .. "/" .. node.entry.status .. "/" .. mapped_id .. ext
     local ok = vim.fn.rename(old_path, new_path)
     if ok ~= 0 then
       return nil, "failed to rename " .. old_path .. " → " .. new_path
@@ -311,7 +362,8 @@ function M.move_task(root, id, dest_status)
     return false, "task already in " .. dest_status
   end
 
-  local new_path = root .. "/" .. dest_status .. "/" .. id .. ".yaml"
+  local ext = task_extension(entry.path)
+  local new_path = root .. "/" .. dest_status .. "/" .. id .. ext
   local ok = vim.fn.rename(entry.path, new_path)
   if ok ~= 0 then
     return false, "failed to rename file"
@@ -335,7 +387,7 @@ function M.generate_id(root, prefix)
   -- Collect all existing IDs
   local existing = {}
   for _, status in ipairs(M.STATUSES) do
-    local files = vim.fn.glob(root .. "/" .. status .. "/*.yaml", false, true)
+    local files = glob_task_files(root .. "/" .. status)
     for _, path in ipairs(files) do
       local stem = vim.fn.fnamemodify(path, ":t:r")
       existing[stem] = true

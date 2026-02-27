@@ -21,11 +21,18 @@ local function complete_task_id()
   if not root then
     return {}
   end
+  local seen = {}
   local ids = {}
   for _, status in ipairs(fs.STATUSES) do
-    local files = vim.fn.glob(root .. "/" .. status .. "/*.yaml", false, true)
-    for _, path in ipairs(files) do
-      ids[#ids + 1] = vim.fn.fnamemodify(path, ":t:r")
+    for _, ext in ipairs(fs.TASK_EXTENSIONS) do
+      local files = vim.fn.glob(root .. "/" .. status .. "/*" .. ext, false, true)
+      for _, path in ipairs(files) do
+        local stem = vim.fn.fnamemodify(path, ":t:r")
+        if not seen[stem] then
+          seen[stem] = true
+          ids[#ids + 1] = stem
+        end
+      end
     end
   end
   table.sort(ids)

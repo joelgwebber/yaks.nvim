@@ -218,4 +218,90 @@ function M.serialize(task)
   return table.concat(parts, "\n") .. "\n"
 end
 
+--- Parse a markdown file with YAML frontmatter into a task table.
+-- Splits on `---` delimiters, parses YAML via M.parse(), and extracts the
+-- markdown body as task.description.
+---@param text string
+---@return table|nil, string|nil
+function M.parse_frontmatter(text)
+  -- Match opening and closing --- delimiters
+  local yaml_block, body = text:match("^%-%-%-\n(.-)\n%-%-%-\n(.*)$")
+  if not yaml_block then
+    -- Try without body (frontmatter only, no trailing content)
+    yaml_block = text:match("^%-%-%-\n(.-)\n%-%-%-$")
+    body = nil
+  end
+  if not yaml_block then
+    return nil, "no frontmatter delimiters found"
+  end
+
+  local task, err = M.parse(yaml_block)
+  if not task then
+    return nil, err
+  end
+
+  -- Extract markdown body as description
+  if body then
+    -- Strip single leading blank line (conventional separator)
+    body = body:gsub("^\n", "")
+    if body ~= "" then
+      -- Ensure trailing newline
+      if not body:match("\n$") then
+        body = body .. "\n"
+      end
+      task.description = body
+      -- Add description to _keys if not already there
+      local has_desc = false
+      for _, k in ipairs(task._keys) do
+        if k == "description" then
+          has_desc = true
+          break
+        end
+      end
+      if not has_desc then
+        task._keys[#task._keys + 1] = "description"
+      end
+    end
+  end
+
+  return task
+end
+
+--- Serialize a task table to markdown with YAML frontmatter.
+-- Description is written as the markdown body, not in the YAML block.
+---@param task table
+---@return string
+function M.serialize_frontmatter(task)
+  -- Build a copy of _keys without "description" for the YAML block
+  local yaml_keys = {}
+  for _, k in ipairs(task._keys or {}) do
+    if k ~= "description" then
+      yaml_keys[#yaml_keys + 1] = k
+    end
+  end
+
+  -- Build a shallow copy with the filtered keys for serialization
+  local yaml_task = {}
+  for k, v in pairs(task) do
+    if k ~= "description" and k ~= "_keys" then
+      yaml_task[k] = v
+    end
+  end
+  yaml_task._keys = yaml_keys
+
+  local yaml = M.serialize(yaml_task)
+  local parts = { "---\n", yaml, "---\n" }
+
+  if task.description and task.description ~= "" then
+    parts[#parts + 1] = "\n"
+    parts[#parts + 1] = task.description
+    -- Ensure trailing newline
+    if not task.description:match("\n$") then
+      parts[#parts + 1] = "\n"
+    end
+  end
+
+  return table.concat(parts)
+end
+
 return M
