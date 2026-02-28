@@ -178,6 +178,13 @@ end, {
   end,
 })
 
+vim.api.nvim_create_user_command("YaksSearch", function(opts)
+  require("yaks").search(opts.args)
+end, {
+  desc = "Search tasks by keyword",
+  nargs = "+",
+})
+
 vim.api.nvim_create_user_command("YaksStats", function()
   require("yaks").stats()
 end, { desc = "Show task statistics" })

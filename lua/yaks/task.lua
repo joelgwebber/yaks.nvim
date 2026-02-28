@@ -162,6 +162,28 @@ function M.stats(all_entries)
   }
 end
 
+--- Search entries by case-insensitive substring across id, title, description, and labels.
+---@param entries table[] list of {status, task, path}
+---@param query string search query
+---@return table[] matching entries
+function M.search(entries, query)
+  local q = query:lower()
+  local result = {}
+  for _, entry in ipairs(entries) do
+    local t = entry.task
+    local haystack = (t.id or "") .. "\0" .. (t.title or "") .. "\0" .. (t.description or "")
+    if t.labels then
+      for _, l in ipairs(t.labels) do
+        haystack = haystack .. "\0" .. l
+      end
+    end
+    if haystack:lower():find(q, 1, true) then
+      result[#result + 1] = entry
+    end
+  end
+  return result
+end
+
 --- Construct a new task table with proper _keys ordering.
 ---@param fields table {title, type?, priority?, description?, depends_on?, labels?}
 ---@param id string generated task ID

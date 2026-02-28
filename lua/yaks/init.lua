@@ -13,6 +13,7 @@ M.config = {
     refresh = "R",
     close = "q",
     help = "?",
+    search = "/",
     filter_next = "n",
     filter_tangled = "t",
     filter_all = "a",
@@ -61,6 +62,12 @@ end
 --- Open the task list filtered to "tangled" tasks.
 function M.tangled()
   require("yaks.ui.list").open({ filter = "tangled" })
+end
+
+--- Open the task list in search mode.
+---@param query string search query
+function M.search(query)
+  require("yaks.ui.list").open({ filter = "search", search_query = query })
 end
 
 --- Show full details for a task.

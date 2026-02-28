@@ -16,7 +16,8 @@ local state = {
   buf = nil,
   line_map = {},
   all_entries = {},
-  filter_mode = "all", -- "all", "next", "tangled"
+  filter_mode = "all", -- "all", "next", "tangled", "search"
+  search_query = nil,
   active_tab = "hairy",
   help_win = nil,
   help_buf = nil,
@@ -80,7 +81,8 @@ end
 ---@param entry table {status, task}
 ---@param is_tangled boolean
 ---@param is_ghost? boolean
-local function highlight_task_line(buf, lnum, line, entry, is_tangled, is_ghost)
+---@param show_badge? boolean
+local function highlight_task_line(buf, lnum, line, entry, is_tangled, is_ghost, show_badge)
   if is_ghost then
     vim.api.nvim_buf_set_extmark(buf, ns, lnum, 0, {
       end_col = #line,
@@ -123,6 +125,21 @@ local function highlight_task_line(buf, lnum, line, entry, is_tangled, is_ghost)
       })
     end
   end
+
+  -- Status badge highlight (search results)
+  if show_badge and not is_tangled then
+    local status = entry.status or ""
+    local badge = "[" .. status .. "]"
+    local badge_start = line:find(badge, 1, true)
+    if badge_start then
+      local hl_map = { hairy = "YaksStatusHairy", shaving = "YaksStatusShaving", shorn = "YaksStatusShorn" }
+      local hl = hl_map[status] or "Comment"
+      vim.api.nvim_buf_set_extmark(buf, ns, lnum, badge_start - 1, {
+        end_col = badge_start - 1 + #badge,
+        hl_group = hl,
+      })
+    end
+  end
 end
 
 --- Build the tab bar line and return segment positions for extmarks.
@@ -136,6 +153,15 @@ local function build_tab_bar(all_entries, active_tab, filter_mode)
   local parts = {}
   local segments = {}
   local col = 0
+
+  -- Search mode: show search header instead of tabs
+  if filter_mode == "search" and state.search_query then
+    local matched = task_mod.search(all_entries, state.search_query)
+    local text = string.format('🔍 "%s" (%d results)', state.search_query, #matched)
+    parts[#parts + 1] = text
+    segments[#segments + 1] = { col_start = 0, col_end = #text, hl_group = "YaksHeader" }
+    return table.concat(parts), segments
+  end
 
   for i, status in ipairs(TAB_ORDER) do
     if i > 1 then
@@ -197,22 +223,28 @@ local function build_content(all_entries, active_tab, filter_mode)
   lines[#lines + 1] = tab_line
   lines[#lines + 1] = ""
 
-  -- Determine which entries to show for the active tab
-  local tab_entries = {}
-  for _, e in ipairs(all_entries) do
-    if e.status == active_tab then
-      tab_entries[#tab_entries + 1] = e
-    end
-  end
-
-  -- Apply filter only on hairy tab
+  -- Determine which entries to show
   local display_entries
-  if active_tab == "hairy" and filter_mode == "next" then
-    display_entries = task_mod.next_tasks(all_entries)
-  elseif active_tab == "hairy" and filter_mode == "tangled" then
-    display_entries = task_mod.tangled_tasks(all_entries)
+  local is_search = filter_mode == "search" and state.search_query
+  if is_search then
+    display_entries = task_mod.search(all_entries, state.search_query)
   else
-    display_entries = tab_entries
+    -- Determine which entries to show for the active tab
+    local tab_entries = {}
+    for _, e in ipairs(all_entries) do
+      if e.status == active_tab then
+        tab_entries[#tab_entries + 1] = e
+      end
+    end
+
+    -- Apply filter only on hairy tab
+    if active_tab == "hairy" and filter_mode == "next" then
+      display_entries = task_mod.next_tasks(all_entries)
+    elseif active_tab == "hairy" and filter_mode == "tangled" then
+      display_entries = task_mod.tangled_tasks(all_entries)
+    else
+      display_entries = tab_entries
+    end
   end
 
   -- Sort by priority
@@ -323,13 +355,15 @@ local function build_content(all_entries, active_tab, filter_mode)
   -- Recursive render helper
   local function render_entry(entry, indent)
     local is_ghost = ghost_ids[entry.task.id] or false
-    local is_tangled = not is_ghost and active_tab == "hairy"
+    -- In search mode, show [status] badge on all entries but don't dim real matches
+    local show_badge = is_ghost or is_search
+    local is_tangled = not is_ghost and not is_search and active_tab == "hairy"
       and task_mod.is_tangled(entry, all_entries)
-    local task_line = format_task_line(entry, is_tangled, indent, is_ghost)
+    local task_line = format_task_line(entry, is_tangled, indent, show_badge)
     lines[#lines + 1] = task_line
     line_map[#lines] = entry.task.id
     task_extmarks[#task_extmarks + 1] = {
-      lnum = #lines - 1, entry = entry, is_tangled = is_tangled, is_ghost = is_ghost,
+      lnum = #lines - 1, entry = entry, is_tangled = is_tangled, is_ghost = is_ghost, show_badge = show_badge and not is_ghost,
     }
     -- Render children
     local kids = children_of[entry.task.id]
@@ -382,7 +416,7 @@ local function apply_extmarks(buf, lines, task_extmarks, tab_segments)
 
   -- Task line highlights
   for _, em in ipairs(task_extmarks) do
-    highlight_task_line(buf, em.lnum, lines[em.lnum + 1], em.entry, em.is_tangled, em.is_ghost)
+    highlight_task_line(buf, em.lnum, lines[em.lnum + 1], em.entry, em.is_tangled, em.is_ghost, em.show_badge)
   end
 end
 
@@ -514,6 +548,10 @@ local function open_help()
     "  e          Edit raw YAML",
     "  R          Refresh list",
     "",
+    "  Search",
+    "  /          Search tasks",
+    "  <Esc>      Clear search",
+    "",
     "  Filters (hairy tab only)",
     "  n          Toggle next filter",
     "  t          Toggle tangled filter",
@@ -556,6 +594,7 @@ local function open_help()
   local section_headers = {
     ["  Navigation"] = true,
     ["  Actions"] = true,
+    ["  Search"] = true,
     ["  Filters (hairy tab only)"] = true,
   }
   for i, line in ipairs(help_lines) do
@@ -688,6 +727,25 @@ local function setup_keymaps(buf)
     M.refresh()
   end, "Show all tasks")
 
+  map(keymaps.search or "/", function()
+    vim.ui.input({ prompt = "Search: " }, function(input)
+      if not input or input == "" then
+        return
+      end
+      state.filter_mode = "search"
+      state.search_query = input
+      M.refresh()
+    end)
+  end, "Search tasks")
+
+  vim.keymap.set("n", "<Esc>", function()
+    if state.filter_mode == "search" then
+      state.filter_mode = "all"
+      state.search_query = nil
+      M.refresh()
+    end
+  end, { buffer = buf, nowait = true, desc = "Clear search" })
+
   -- Tab navigation
   map("<Tab>", function()
     cycle_tab(1)
@@ -722,14 +780,18 @@ local function open_split(split, list_size)
 end
 
 --- Open (or focus) the task list buffer.
----@param opts? {filter?: string, split?: string}
+---@param opts? {filter?: string, split?: string, search_query?: string}
 function M.open(opts)
   setup_highlights()
 
   local filter = opts and opts.filter
   if filter then
     state.filter_mode = filter
-    state.active_tab = "hairy"
+    if filter == "search" then
+      state.search_query = opts and opts.search_query
+    else
+      state.active_tab = "hairy"
+    end
   end
 
   local config = require("yaks").config
