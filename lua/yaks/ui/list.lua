@@ -24,13 +24,14 @@ local state = {
   split = nil, -- effective split direction for this list instance
 }
 
---- Format a single task line (no status badge needed — tab provides context).
+--- Format a single task line with aligned columns.
 ---@param entry table {status, task, path}
 ---@param is_tangled boolean
 ---@param indent_level? integer nesting depth (0 = root, default)
 ---@param is_ghost? boolean whether this is a ghost node from another tab
+---@param id_col_width? integer total width for indent+ID column (for alignment)
 ---@return string
-local function format_task_line(entry, is_tangled, indent_level, is_ghost)
+local function format_task_line(entry, is_tangled, indent_level, is_ghost, id_col_width)
   local t = entry.task
   local suffix = ""
   if is_ghost then
@@ -38,11 +39,16 @@ local function format_task_line(entry, is_tangled, indent_level, is_ghost)
   elseif is_tangled then
     suffix = " [tangled]"
   end
-  local indent = string.rep("  ", indent_level or 0)
+  local indent_chars = (indent_level or 0) * 2
+  local id_str = t.id or "???"
+  -- Pad so indent + id + padding = id_col_width
+  local pad = (id_col_width or (indent_chars + #id_str + 1)) - indent_chars - #id_str
+  if pad < 1 then pad = 1 end
   return string.format(
-    "  %s%-10s p%d  %-8s %s%s",
-    indent,
-    t.id or "???",
+    "  %s%s%s p%d  %-8s %s%s",
+    string.rep(" ", indent_chars),
+    id_str,
+    string.rep(" ", pad),
     t.priority or 0,
     t.type or "task",
     t.title or "(untitled)",
@@ -88,6 +94,17 @@ local function highlight_task_line(buf, lnum, line, entry, is_tangled, is_ghost,
       end_col = #line,
       hl_group = "YaksGhost",
     })
+    -- Highlight the [status] badge with status-specific color over the ghost dimming
+    local status = entry.status or ""
+    local badge = "[" .. status .. "]"
+    local badge_start = line:find(badge, 1, true)
+    if badge_start then
+      local hl_map = { hairy = "YaksStatusHairy", shaving = "YaksStatusShaving", shorn = "YaksStatusShorn" }
+      vim.api.nvim_buf_set_extmark(buf, ns, lnum, badge_start - 1, {
+        end_col = badge_start - 1 + #badge,
+        hl_group = hl_map[status] or "Comment",
+      })
+    end
     return
   end
 
@@ -352,6 +369,24 @@ local function build_content(all_entries, active_tab, filter_mode)
     end)
   end
 
+  -- Compute max (indent*2 + #id) for column alignment
+  local id_col_width = 0
+  local function measure_entry(entry_id, indent)
+    local id = entry_id
+    local w = indent * 2 + #id
+    if w > id_col_width then id_col_width = w end
+    local kids = children_of[entry_id]
+    if kids then
+      for _, child in ipairs(kids) do
+        measure_entry(child.task.id, indent + 1)
+      end
+    end
+  end
+  for _, entry in ipairs(root_entries) do
+    measure_entry(entry.task.id, 0)
+  end
+  id_col_width = id_col_width + 1 -- trailing space after ID
+
   -- Recursive render helper
   local function render_entry(entry, indent)
     local is_ghost = ghost_ids[entry.task.id] or false
@@ -359,7 +394,7 @@ local function build_content(all_entries, active_tab, filter_mode)
     local show_badge = is_ghost or is_search
     local is_tangled = not is_ghost and not is_search and active_tab == "hairy"
       and task_mod.is_tangled(entry, all_entries)
-    local task_line = format_task_line(entry, is_tangled, indent, show_badge)
+    local task_line = format_task_line(entry, is_tangled, indent, show_badge, id_col_width)
     lines[#lines + 1] = task_line
     line_map[#lines] = entry.task.id
     task_extmarks[#task_extmarks + 1] = {

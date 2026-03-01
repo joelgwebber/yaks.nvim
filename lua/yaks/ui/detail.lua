@@ -22,7 +22,7 @@ local function setup_desc_highlights()
 end
 
 --- Persistent state for the detail window.
-local state = { win = nil, buf = nil, nav_lines = {}, history = {}, forward = {} }
+local state = { win = nil, buf = nil, task_id = nil, nav_lines = {}, history = {}, forward = {} }
 
 --- Format a task for display in the detail buffer.
 ---@param entry table {status, task, path}
@@ -464,7 +464,13 @@ function M.open(task_id)
   vim.bo[buf].bufhidden = "wipe"
   vim.bo[buf].swapfile = false
   vim.bo[buf].filetype = "yaks-detail"
-  vim.api.nvim_buf_set_name(buf, "yaks://detail/" .. task_id)
+  -- Wipe any stale buffer with this name to avoid E95
+  local buf_name = "yaks://detail/" .. task_id
+  local existing = vim.fn.bufnr(buf_name)
+  if existing ~= -1 and existing ~= buf then
+    pcall(vim.api.nvim_buf_delete, existing, { force = true })
+  end
+  vim.api.nvim_buf_set_name(buf, buf_name)
 
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modifiable = false
@@ -487,6 +493,7 @@ function M.open(task_id)
   end
 
   state.buf = buf
+  state.task_id = task_id
 
   -- Conceal settings for markdown rendering in descriptions
   vim.wo[state.win].conceallevel = 2
@@ -496,6 +503,16 @@ function M.open(task_id)
   apply_highlights(buf, lines, desc_start, desc_end)
   setup_keymaps(buf, task_id)
 
+  -- Refresh on focus (re-read task data from disk)
+  vim.api.nvim_create_autocmd("BufEnter", {
+    buffer = buf,
+    callback = function()
+      if state.task_id then
+        M.refresh()
+      end
+    end,
+  })
+
   -- Clear state when window is closed manually
   vim.api.nvim_create_autocmd("WinClosed", {
     pattern = tostring(state.win),
@@ -503,8 +520,33 @@ function M.open(task_id)
     callback = function()
       state.win = nil
       state.buf = nil
+      state.task_id = nil
     end,
   })
+end
+
+--- Refresh the detail buffer contents in-place.
+function M.refresh()
+  if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) or not state.task_id then
+    return
+  end
+
+  local root = fs.find_root()
+  if not root then return end
+
+  local entry = fs.find_task(root, state.task_id)
+  if not entry then return end
+
+  local all_entries = fs.list_all_tasks(root)
+  local lines, nav_lines, desc_start, desc_end = format_detail(entry, all_entries, root)
+  state.nav_lines = nav_lines
+
+  vim.bo[state.buf].modifiable = true
+  vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, lines)
+  vim.bo[state.buf].modifiable = false
+
+  setup_desc_highlights()
+  apply_highlights(state.buf, lines, desc_start, desc_end)
 end
 
 --- Close the detail window.
@@ -516,6 +558,7 @@ function M.close()
   end
   state.win = nil
   state.buf = nil
+  state.task_id = nil
 end
 
 return M
