@@ -475,6 +475,17 @@ function M.open(task_id)
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modifiable = false
 
+  -- Recover from module reload: find orphaned detail window
+  if not state.win or not vim.api.nvim_win_is_valid(state.win) then
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+      local win_buf = vim.api.nvim_win_get_buf(win)
+      if vim.api.nvim_buf_is_valid(win_buf) and vim.bo[win_buf].filetype == "yaks-detail" then
+        state.win = win
+        break
+      end
+    end
+  end
+
   -- Reuse existing detail window if valid and showing a yaks-detail buffer
   local reuse = state.win
     and vim.api.nvim_win_is_valid(state.win)
